@@ -1,0 +1,4 @@
+[build]
+# Python 编译缓存放到系统临时目录，避免污染项目目录
+# Chrome 扩展加载时禁止任何下划线开头的文件/目录
+pycache_dir = %LOCALAPPDATA%\pycache-prompt-reverse-extension

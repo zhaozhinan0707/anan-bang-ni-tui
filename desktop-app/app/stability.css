@@ -1,0 +1,3 @@
+/* 画布与自定义工作流节点在拖动时不应推动页面本身产生瞬时滚动条。 */
+html,body,#root{overflow:hidden!important}
+.detail,.asset-library-list{scrollbar-width:none}.detail::-webkit-scrollbar,.asset-library-list::-webkit-scrollbar{width:0;height:0}

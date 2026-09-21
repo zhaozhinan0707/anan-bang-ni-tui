@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>提示词反推 · 收藏功能设计稿</title>
+<style>
+/* ==================== 设计令牌（完全复用现有插件） ==================== */
+:root {
+  --bg-page: #FAFAFA;
+  --bg-card: #FFFFFF;
+  --bg-input: #F4F4F5;
+  --bg-toast: #ECFDF5;
+  --bg-fav: #FEF3C7;
+  --border: #E4E4E7;
+  --border-strong: #D4D4D8;
+
+  --text-primary: #0A0A0B;
+  --text-secondary: #52525B;
+  --text-placeholder: #A1A1AA;
+
+  --accent: #3B82F6;
+  --accent-hover: #2563EB;
+  --accent-light: #EFF6FF;
+  --success: #10B981;
+  --success-text: #059669;
+  --error: #EF4444;
+  --warning: #F59E0B;
+  --warning-text: #B45309;
+  --gray-btn: #F4F4F5;
+
+  --r-input: 8px;
+  --r-card: 12px;
+  --r-pill: 18px;
+
+  --shadow-panel: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-window: 0 4px 24px rgba(0,0,0,0.08);
+  --shadow-popup: 0 12px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-card: 0 1px 4px rgba(0,0,0,0.04);
+
+  --font-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --t-fast: 150ms ease;
+  --t-base: 220ms ease;
+  --t-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: var(--font-stack);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+
+/* ==================== 顶部说明栏 ==================== */
+.design-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 40px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.design-title { font-size: 18px; font-weight: var(--fw-semibold); }
+.design-title .accent { color: var(--accent); }
+.design-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.design-tags { display: flex; gap: 8px; }
+.design-tag {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 12px;
+  background: var(--bg-input);
+  border-radius: 12px;
+  font-weight: var(--fw-medium);
+}
+
+/* ==================== 设计舞台 ==================== */
+.stage {
+  padding: 48px 40px 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 64px;
+}
+
+/* 区块标题 */
+.section-block { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  color: var(--text-secondary);
+}
+.section-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+}
+.section-desc { font-size: 12px; color: var(--text-placeholder); text-align: center; max-width: 640px; }
+
+/* 多画面并排 */
+.preview-row { display: flex; gap: 32px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+.preview-item { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.preview-caption {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: var(--fw-medium);
+  padding: 4px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* 标注 */
+.annotation {
+  position: relative;
+  padding: 8px 14px;
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: var(--r-input);
+  font-size: 12px;
+  color: var(--warning-text);
+  line-height: 1.6;
+  max-width: 440px;
+}
+.annotation::before {
+  content: '设计说明';
+  display: block;
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  color: var(--warning);
+  margin-bottom: 2px;
+  letter-spacing: 0.5px;
+}
+
+/* ============================================================ */
+/* 画面一：反推结果面板（带收藏按钮）                              */
+/* ============================================================ */
+.result-panel {
+  width: 440px;
+  max-height: 560px;
+  background: var(--bg-card);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 面板头部 —— 新增收藏按钮的位置 */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.panel-title { font-size: 15px; font-weight: var(--fw-semibold); }
+.panel-header-actions { display: flex; align-items: center; gap: 2px; }
+
+/* 收藏按钮（图标按钮，放在 header 右侧） */
+.fav-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all var(--t-fast);
+  position: relative;
+}
+.fav-btn svg { width: 18px; height: 18px; transition: all var(--t-fast); }
+.fav-btn:hover { background: var(--accent-light); }
+.fav-btn:hover svg { color: var(--accent); }
+
+/* 已收藏状态 */
+.fav-btn.is-fav { background: var(--accent-light); }
+.fav-btn.is-fav svg { color: var(--accent); }
+.fav-btn.is-fav::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-card);
+}
+
+.close-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: background var(--t-fast);
+}
+.close-btn:hover { background: var(--bg-input); }
+.close-btn svg { width: 16px; height: 16px; }
+
+/* 缩略图 */
+.image-thumbnail {
+  width: 100%;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #E0E7FF 0%, #C7D2FE 100%);
+  flex-shrink: 0;
+}
+.thumb-label {
+  font-size: 16px;
+  font-weight: var(--fw-medium);
+  color: rgba(0,0,0,0.35);
+  letter-spacing: 1px;
+}
+
+/* 提示词区 */
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.prompt-label { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-secondary); }
+.prompt-text-container {
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: var(--r-input);
+}
+.prompt-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 22px;
+  word-break: break-all;
+}
+.metadata-row { display: flex; gap: 12px; align-items: center; }
+.meta-item { font-size: 11px; color: var(--text-secondary); }
+.meta-divider { color: var(--border-strong); }
+
+/* 操作栏 */
+.action-bar {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.btn-copy {
+  flex: 1;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--r-input);
+  font-size: 14px;
+  font-weight: var(--fw-semibold);
+  transition: background var(--t-fast);
+}
+.btn-copy:hover { background: var(--accent-hover); }
+.btn-copy svg { width: 16px; height: 16px; }
+.btn-regenerate {
+  width: 110px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--gray-btn);
+  color: var(--text-secondary);
+  border-radius: var(--r-input);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  transition: all var(--t-fast);
+}
+.btn-regenerate:hover { background: var(--border); }
+.btn-regenerate svg { width: 14px; height: 14px; }
+
+/* Toast 收藏成功提示 */
+.fav-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  background: var(--accent-light);
+  flex-shrink: 0;
+  animation: slideDown 0.3s ease;
+}
+.fav-toast svg { width: 16px; height: 16px; flex-shrink: 0; }
+.fav-toast-text { font-size: 13px; font-weight: var(--fw-medium); color: var(--accent-hover); }
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================ */
+/* 画面二：扩展 Popup —— 收藏夹 Tab 页                              */
+/* ============================================================ */
+.extension-popup {
+  width: 380px;
+  height: 560px;
+  background: var(--bg-card);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-popup);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Popup 头部 */
+.popup-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.popup-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.popup-logo svg { width: 18px; height: 18px; }
+.popup-title { font-size: 15px; font-weight: var(--fw-semibold); }
+
+/* Tab 切换栏 —— 新增 */
+.tab-bar {
+  display: flex;
+  height: 44px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-card);
+}
+.tab-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+  position: relative;
+  transition: color var(--t-fast);
+}
+.tab-item:hover { color: var(--text-primary); }
+.tab-item.active { color: var(--accent); font-weight: var(--fw-semibold); }
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.tab-item svg { width: 15px; height: 15px; }
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--accent-light);
+  color: var(--accent);
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+}
+
+/* Tab 内容区 */
+.tab-content { flex: 1; overflow-y: auto; display: none; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* 容量状态条 */
+.capacity-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.capacity-row { display: flex; align-items: center; justify-content: space-between; }
+.capacity-label { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-secondary); }
+.capacity-count { font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-primary); }
+.capacity-count .max { color: var(--text-placeholder); font-weight: var(--fw-regular); }
+.capacity-track {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-input);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.capacity-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width var(--t-base);
+}
+.capacity-fill.warn { background: var(--warning); }
+.capacity-fill.full { background: var(--error); }
+
+/* 容量满提示 */
+.capacity-warn-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #FEF3C7;
+  font-size: 12px;
+  color: var(--warning-text);
+  font-weight: var(--fw-medium);
+  flex-shrink: 0;
+}
+.capacity-warn-tip svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* 收藏列表 */
+.fav-list {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+/* 收藏项卡片 */
+.fav-card {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
+  transition: all var(--t-fast);
+  position: relative;
+}
+.fav-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+.fav-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-input);
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #FCE7F3 0%, #FBCFE8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.fav-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.fav-thumb-grad-1 { background: linear-gradient(135deg, #FCE7F3 0%, #FBCFE8 100%); }
+.fav-thumb-grad-2 { background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%); }
+.fav-thumb-grad-3 { background: linear-gradient(135deg, #E0E7FF 0%, #C7D2FE 100%); }
+.fav-thumb-grad-4 { background: linear-gradient(135deg, #FED7AA 0%, #FDBA74 100%); }
+.fav-thumb-grad-5 { background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); }
+
+.fav-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.fav-prompt {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 18px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+.fav-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-placeholder); }
+.fav-meta-model {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-weight: var(--fw-medium);
+}
+.fav-meta-dot { color: var(--border-strong); }
+
+.fav-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.fav-action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-placeholder);
+  transition: all var(--t-fast);
+}
+.fav-action-btn svg { width: 14px; height: 14px; }
+.fav-action-btn:hover { background: var(--accent-light); color: var(--accent); }
+.fav-action-btn.danger:hover { background: #FEE2E2; color: var(--error); }
+
+/* 空状态 */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 24px;
+  text-align: center;
+}
+.empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--bg-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.empty-icon svg { width: 32px; height: 32px; color: var(--border-strong); }
+.empty-title { font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
+.empty-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.7; max-width: 240px; }
+.empty-steps { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.empty-step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+.empty-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: var(--accent-light);
+  color: var(--accent);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  flex-shrink: 0;
+}
+
+/* 底部操作栏（仅满状态时显示清理入口） */
+.popup-footer {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-card);
+}
+.btn-secondary {
+  flex: 1;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--gray-btn);
+  color: var(--text-secondary);
+  border-radius: var(--r-input);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  transition: all var(--t-fast);
+}
+.btn-secondary:hover { background: var(--border); color: var(--text-primary); }
+.btn-secondary svg { width: 14px; height: 14px; }
+.btn-secondary.danger { color: var(--error); }
+.btn-secondary.danger:hover { background: #FEE2E2; border-color: #FECACA; }
+
+/* ==================== 底部图例 ==================== */
+.legend {
+  margin: 0 40px 48px;
+  padding: 20px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  max-width: 900px;
+}
+.legend-title { font-size: 14px; font-weight: var(--fw-semibold); margin-bottom: 14px; }
+.legend-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 32px; }
+.legend-item { display: flex; gap: 10px; align-items: flex-start; }
+.legend-swatch {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.legend-swatch svg { width: 16px; height: 16px; }
+.legend-text { font-size: 12px; line-height: 1.6; }
+.legend-text strong { display: block; color: var(--text-primary); font-weight: var(--fw-semibold); }
+.legend-text span { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+
+<!-- ==================== 顶部说明栏 ==================== -->
+<header class="design-header">
+  <div>
+    <div class="design-title">提示词反推 · <span class="accent">收藏功能</span> 设计稿</div>
+    <div class="design-sub">在反推结果面板新增收藏按钮 + 扩展 Popup 新增收藏夹 Tab 页（上限 15 条）</div>
+  </div>
+  <div class="design-tags">
+    <span class="design-tag">设计令牌：复用现有</span>
+    <span class="design-tag">主色 #3B82F6</span>
+    <span class="design-tag">Popup 380×560</span>
+  </div>
+</header>
+
+<main class="stage">
+
+  <!-- ==================== 画面一：反推结果面板 + 收藏按钮 ==================== -->
+  <section class="section-block">
+    <div class="section-label"><span class="section-num">1</span>反推结果面板 · 新增收藏按钮</div>
+    <div class="section-desc">收藏按钮放在面板头部右侧（关闭按钮左边），图标按钮形式。不挤占底部操作栏，符合「收藏是页面级操作」的直觉。左为未收藏，右为已收藏并触发 Toast。</div>
+
+    <div class="preview-row">
+      <!-- 未收藏状态 -->
+      <div class="preview-item">
+        <div class="result-panel">
+          <div class="panel-header">
+            <span class="panel-title">提示词反推结果</span>
+            <div class="panel-header-actions">
+              <button class="fav-btn" id="fav-btn-1" title="收藏">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              </button>
+              <button class="close-btn" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="#52525B" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="image-thumbnail"><span class="thumb-label">3D渲染图</span></div>
+          <div class="prompt-section">
+            <div class="prompt-label">反推提示词</div>
+            <div class="prompt-text-container">
+              <p class="prompt-text">未来感3D渲染场景，柔和的体积光照，虹彩质感材质，全息界面悬浮于深色空间中，电影级构图，Octane渲染器，8K超高清</p>
+            </div>
+            <div class="metadata-row">
+              <span class="meta-item">模型: GPT-4o</span>
+              <span class="meta-divider">·</span>
+              <span class="meta-item">耗时: 2.3s</span>
+            </div>
+          </div>
+          <div class="action-bar">
+            <button class="btn-copy">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="white" stroke-width="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15" stroke="white" stroke-width="2"/></svg>
+              <span>一键复制</span>
+            </button>
+            <button class="btn-regenerate">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5" stroke="#52525B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>重新生成</span>
+            </button>
+          </div>
+        </div>
+        <div class="preview-caption">未收藏状态</div>
+      </div>
+
+      <!-- 已收藏状态 -->
+      <div class="preview-item">
+        <div class="result-panel">
+          <div class="fav-toast">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" fill="#3B82F6" stroke="#3B82F6" stroke-width="2" stroke-linejoin="round"/></svg>
+            <span class="fav-toast-text">已收藏到收藏夹</span>
+          </div>
+          <div class="panel-header">
+            <span class="panel-title">提示词反推结果</span>
+            <div class="panel-header-actions">
+              <button class="fav-btn is-fav" title="已收藏，点击取消">
+                <svg viewBox="0 0 24 24" fill="#3B82F6" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              </button>
+              <button class="close-btn" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M18 6L6 18" stroke="#52525B" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="image-thumbnail"><span class="thumb-label">3D渲染图</span></div>
+          <div class="prompt-section">
+            <div class="prompt-label">反推提示词</div>
+            <div class="prompt-text-container">
+              <p class="prompt-text">未来感3D渲染场景，柔和的体积光照，虹彩质感材质，全息界面悬浮于深色空间中，电影级构图，Octane渲染器，8K超高清</p>
+            </div>
+            <div class="metadata-row">
+              <span class="meta-item">模型: GPT-4o</span>
+              <span class="meta-divider">·</span>
+              <span class="meta-item">耗时: 2.3s</span>
+            </div>
+          </div>
+          <div class="action-bar">
+            <button class="btn-copy">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="white" stroke-width="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15" stroke="white" stroke-width="2"/></svg>
+              <span>一键复制</span>
+            </button>
+            <button class="btn-regenerate">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5" stroke="#52525B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>重新生成</span>
+            </button>
+          </div>
+        </div>
+        <div class="preview-caption">已收藏状态（顶部 Toast 反馈）</div>
+      </div>
+    </div>
+
+    <div class="annotation">
+      <strong style="color:var(--warning)">设计决策：</strong>收藏按钮采用<strong>书签图标</strong>而非爱心，与「提示词」语义更贴合（收藏知识而非点赞）。放在 header 右上角而非操作栏，避免底部三按钮拥挤，也让「收藏」与「关闭」同属页面级操作。点击后顶部蓝色 Toast 反馈，复用现有复制 Toast 的交互模式，保持一致。
+    </div>
+  </section>
+
+  <!-- ==================== 画面二：Popup 收藏夹 Tab（有数据） ==================== -->
+  <section class="section-block">
+    <div class="section-label"><span class="section-num">2</span>扩展 Popup · 收藏夹 Tab 页（核心）</div>
+    <div class="section-desc">Popup 顶部新增「设置 / 收藏夹」Tab 切换。收藏夹页含容量进度条（X/15）+ 收藏列表。每条卡片：缩略图 + 两行提示词预览 + 模型/时间 + 复制/删除操作。</div>
+
+    <div class="preview-row">
+      <!-- 收藏夹 - 有数据 -->
+      <div class="preview-item">
+        <div class="extension-popup">
+          <div class="popup-header">
+            <div class="popup-logo">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="white"/></svg>
+            </div>
+            <span class="popup-title">提示词反推</span>
+          </div>
+          <div class="tab-bar">
+            <button class="tab-item" data-tab="settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+              <span>设置</span>
+            </button>
+            <button class="tab-item active" data-tab="favorites">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              <span>收藏夹</span>
+              <span class="tab-badge">5</span>
+            </button>
+          </div>
+          <div class="tab-content active" id="tab-favorites">
+            <div class="capacity-bar">
+              <div class="capacity-row">
+                <span class="capacity-label">已收藏</span>
+                <span class="capacity-count">5<span class="max"> / 15</span></span>
+              </div>
+              <div class="capacity-track"><div class="capacity-fill" style="width:33.3%"></div></div>
+            </div>
+            <div class="fav-list">
+              <!-- 卡片 1 -->
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-3"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">未来感3D渲染场景，柔和的体积光照，虹彩质感材质，全息界面悬浮于深色空间中，电影级构图，Octane渲染器</p>
+                  <div class="fav-meta">
+                    <span class="fav-meta-model">GPT-4o</span>
+                    <span class="fav-meta-dot">·</span>
+                    <span>2小时前</span>
+                  </div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg>
+                  </button>
+                  <button class="fav-action-btn danger" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <!-- 卡片 2 -->
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-1"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">日式插画风格，柔和粉色调，樱花飘落场景，少女侧脸特写，水彩质感，细腻光影，宫崎骏动画风格</p>
+                  <div class="fav-meta">
+                    <span class="fav-meta-model">Claude 3.5</span>
+                    <span class="fav-meta-dot">·</span>
+                    <span>昨天</span>
+                  </div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg>
+                  </button>
+                  <button class="fav-action-btn danger" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <!-- 卡片 3 -->
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-2"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">城市夜景摄影，长曝光效果，车流光轨勾勒出繁华都市轮廓，玻璃幕墙反射霓虹灯光，35mm 镜头</p>
+                  <div class="fav-meta">
+                    <span class="fav-meta-model">GPT-4o</span>
+                    <span class="fav-meta-dot">·</span>
+                    <span>3天前</span>
+                  </div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg>
+                  </button>
+                  <button class="fav-action-btn danger" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <!-- 卡片 4 -->
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-4"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">极简主义海报设计，几何分割构图，撞色配色方案，sans-serif 字体排版，负空间运用，瑞士设计风格</p>
+                  <div class="fav-meta">
+                    <span class="fav-meta-model">豆包 Pro</span>
+                    <span class="fav-meta-dot">·</span>
+                    <span>5天前</span>
+                  </div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg>
+                  </button>
+                  <button class="fav-action-btn danger" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                  </button>
+                </div>
+              </div>
+              <!-- 卡片 5 -->
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-5"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">现代化移动应用 UI 设计，毛玻璃效果，渐变背景，明暗模式适配，组件化设计语言，12px 圆角</p>
+                  <div class="fav-meta">
+                    <span class="fav-meta-model">DeepSeek-V3</span>
+                    <span class="fav-meta-dot">·</span>
+                    <span>1周前</span>
+                  </div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg>
+                  </button>
+                  <button class="fav-action-btn danger" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="preview-caption">有数据状态（5/15）</div>
+      </div>
+
+      <!-- 收藏夹 - 空状态 -->
+      <div class="preview-item">
+        <div class="extension-popup">
+          <div class="popup-header">
+            <div class="popup-logo">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="white"/></svg>
+            </div>
+            <span class="popup-title">提示词反推</span>
+          </div>
+          <div class="tab-bar">
+            <button class="tab-item" data-tab="settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+              <span>设置</span>
+            </button>
+            <button class="tab-item active" data-tab="favorites">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              <span>收藏夹</span>
+            </button>
+          </div>
+          <div class="tab-content active">
+            <div class="capacity-bar">
+              <div class="capacity-row">
+                <span class="capacity-label">已收藏</span>
+                <span class="capacity-count">0<span class="max"> / 15</span></span>
+              </div>
+              <div class="capacity-track"><div class="capacity-fill" style="width:0%"></div></div>
+            </div>
+            <div class="empty-state">
+              <div class="empty-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              </div>
+              <div>
+                <div class="empty-title">还没有收藏的提示词</div>
+                <div class="empty-desc">在网页图片上反推提示词后，点击收藏按钮即可保存到这里</div>
+              </div>
+              <div class="empty-steps">
+                <div class="empty-step"><span class="empty-step-num">1</span><span>鼠标悬停网页图片，点击「反推提示词」</span></div>
+                <div class="empty-step"><span class="empty-step-num">2</span><span>在结果面板右上角点击书签图标收藏</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="preview-caption">空状态（引导式）</div>
+      </div>
+
+      <!-- 收藏夹 - 满状态 -->
+      <div class="preview-item">
+        <div class="extension-popup">
+          <div class="popup-header">
+            <div class="popup-logo">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="white"/></svg>
+            </div>
+            <span class="popup-title">提示词反推</span>
+          </div>
+          <div class="tab-bar">
+            <button class="tab-item" data-tab="settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+              <span>设置</span>
+            </button>
+            <button class="tab-item active" data-tab="favorites">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+              <span>收藏夹</span>
+              <span class="tab-badge" style="background:#FEE2E2;color:#EF4444">15</span>
+            </button>
+          </div>
+          <div class="tab-content active">
+            <div class="capacity-warn-tip">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>收藏已满 15/15，删除部分后可继续收藏</span>
+            </div>
+            <div class="capacity-bar" style="border-bottom:none">
+              <div class="capacity-row">
+                <span class="capacity-label">已收藏</span>
+                <span class="capacity-count">15<span class="max"> / 15</span></span>
+              </div>
+              <div class="capacity-track"><div class="capacity-fill full" style="width:100%"></div></div>
+            </div>
+            <div class="fav-list" style="padding-top:4px">
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-3"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">未来感3D渲染场景，柔和的体积光照，虹彩质感材质，全息界面悬浮于深色空间中</p>
+                  <div class="fav-meta"><span class="fav-meta-model">GPT-4o</span><span class="fav-meta-dot">·</span><span>2小时前</span></div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg></button>
+                  <button class="fav-action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
+                </div>
+              </div>
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-1"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">日式插画风格，柔和粉色调，樱花飘落场景，少女侧脸特写，水彩质感</p>
+                  <div class="fav-meta"><span class="fav-meta-model">Claude 3.5</span><span class="fav-meta-dot">·</span><span>昨天</span></div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg></button>
+                  <button class="fav-action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
+                </div>
+              </div>
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-2"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">城市夜景摄影，长曝光效果，车流光轨勾勒出繁华都市轮廓，玻璃幕墙反射霓虹</p>
+                  <div class="fav-meta"><span class="fav-meta-model">GPT-4o</span><span class="fav-meta-dot">·</span><span>3天前</span></div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg></button>
+                  <button class="fav-action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
+                </div>
+              </div>
+              <div class="fav-card">
+                <div class="fav-thumb fav-thumb-grad-4"></div>
+                <div class="fav-body">
+                  <p class="fav-prompt">极简主义海报设计，几何分割构图，撞色配色方案，sans-serif 字体排版</p>
+                  <div class="fav-meta"><span class="fav-meta-model">豆包 Pro</span><span class="fav-meta-dot">·</span><span>5天前</span></div>
+                </div>
+                <div class="fav-actions">
+                  <button class="fav-action-btn" title="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5C5 3.9 5.9 3 7 3H15"/></svg></button>
+                  <button class="fav-action-btn danger" title="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
+                </div>
+              </div>
+            </div>
+            <div class="popup-footer">
+              <button class="btn-secondary danger" style="flex:1">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+                <span>清空收藏</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="preview-caption">满状态（15/15，红色预警）</div>
+      </div>
+    </div>
+
+    <div class="annotation">
+      <strong style="color:var(--warning)">设计决策：</strong>
+      ① <strong>Tab 切换</strong>而非独立页面——保持 Popup 单一入口，降低认知成本；收藏夹 Tab 带数量徽标，一眼看到存量。<br>
+      ② <strong>容量进度条</strong>用颜色分级：蓝（正常）→ 橙（≥12 条预警）→ 红（满 15 条），满状态时 Tab 徽标也变红，形成视觉警示。<br>
+      ③ <strong>收藏卡片</strong>采用「缩略图 + 两行预览 + 模型标签 + 时间」紧凑布局，44px 缩略图保留视觉记忆点；操作按钮常驻右侧（非 hover 展开），兼容触控板。<br>
+      ④ <strong>空状态</strong>用分步引导代替空洞文案，告诉用户「怎么收藏」，降低首次使用门槛。
+    </div>
+  </section>
+
+</main>
+
+<!-- ==================== 设计规范图例 ==================== -->
+<div class="legend">
+  <div class="legend-title">设计规范速查</div>
+  <div class="legend-grid">
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#3B82F6">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+      </div>
+      <div class="legend-text"><strong>主色 #3B82F6</strong><span>收藏激活态、按钮、进度条、Tab 指示条</span></div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#EFF6FF">
+        <svg viewBox="0 0 24 24" fill="#3B82F6" stroke="#3B82F6" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+      </div>
+      <div class="legend-text"><strong>收藏激活浅蓝 #EFF6FF</strong><span>已收藏按钮背景、Toast 背景、hover 态</span></div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#F59E0B">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+      </div>
+      <div class="legend-text"><strong>预警色 #F59E0B</strong><span>容量 ≥12 条时进度条转橙</span></div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#EF4444">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </div>
+      <div class="legend-text"><strong>危险色 #EF4444</strong><span>满 15 条进度条、删除按钮 hover、清空收藏</span></div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#F4F4F5;border:1px solid #E4E4E7">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/></svg>
+      </div>
+      <div class="legend-text"><strong>圆角 8px / 12px</strong><span>卡片 8px，面板/Popup 12px，与现有一致</span></div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#0A0A0B">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><text x="12" y="16" text-anchor="middle" fill="white" stroke="none" font-size="10" font-weight="700">Aa</text></svg>
+      </div>
+      <div class="legend-text"><strong>字体 Inter / PingFang SC</strong><span>13px 正文、12px 辅助、11px meta，复用现有</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== 交互演示 ====================
+// 画面一：点击收藏按钮切换状态
+document.querySelectorAll('.fav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const isFav = btn.classList.toggle('is-fav');
+    const svg = btn.querySelector('svg');
+    if (isFav) {
+      svg.setAttribute('fill', '#3B82F6');
+      svg.setAttribute('stroke', '#3B82F6');
+      svg.style.color = '#3B82F6';
+    } else {
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', '#52525B');
+      svg.style.color = '';
+    }
+  });
+});
+
+// 画面二：Tab 切换演示
+document.querySelectorAll('.tab-item').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const popup = tab.closest('.extension-popup');
+    popup.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// 收藏卡片操作演示
+document.querySelectorAll('.fav-action-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const card = btn.closest('.fav-card');
+    if (btn.classList.contains('danger')) {
+      card.style.transition = 'all 0.25s ease';
+      card.style.opacity = '0';
+      card.style.transform = 'translateX(20px)';
+      setTimeout(() => { card.style.display = 'none'; }, 250);
+    } else {
+      const svg = btn.querySelector('svg');
+      const orig = svg.innerHTML;
+      svg.innerHTML = '<path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>';
+      btn.style.color = '#10B981';
+      btn.style.background = '#ECFDF5';
+      setTimeout(() => {
+        svg.innerHTML = orig;
+        btn.style.color = '';
+        btn.style.background = '';
+      }, 1500);
+    }
+  });
+});
+</script>
+</body>
+</html>

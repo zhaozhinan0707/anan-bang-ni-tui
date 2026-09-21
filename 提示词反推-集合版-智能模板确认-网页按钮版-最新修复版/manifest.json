@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "提示词反推 - AI 图片提示词生成器",
+  "version": "1.8.0",
+  "description": "在任意网页图片上悬浮按钮，一键调用 AI 反推中文提示词，支持 GPT/Claude/豆包/DeepSeek 等 20+ 模型和中转站。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "downloads",
+    "windows"
+    ,"sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/matchers.js", "content/vault-collector.js", "content/content.js", "content/image-search-picker.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "提示词反推设置",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "start-image-selection": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "选择图片进行以图搜图" }
+  },
+  "side_panel": {
+    "default_path": "popup/popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content/content.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>保存到提示词收藏夹</title>
+<style>
+  body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:#f7f8fa;margin:0;padding:16px;color:#1f2329;font-size:13px}
+  h1{font-size:15px;font-weight:500;margin:0 0 12px}
+  .thumb{width:120px;height:120px;border-radius:10px;background:#eef0f3;border:1px solid #e4e6eb;margin-bottom:12px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .thumb img{max-width:100%;max-height:100%;object-fit:cover}
+  .thumb .empty{color:#8f959e;font-size:12px}
+  label{display:block;font-size:12px;font-weight:500;margin:10px 0 4px}
+  textarea,input{width:100%;box-sizing:border-box;border:1px solid #d0d3da;border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;outline:none}
+  textarea{min-height:110px;resize:vertical;line-height:1.6}
+  textarea:focus,input:focus{border-color:#3370ff}
+  .row{display:flex;gap:10px}
+  .row>div{flex:1}
+  .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  button{padding:7px 16px;border-radius:8px;border:1px solid #d0d3da;background:#fff;font-size:12px;cursor:pointer}
+  button.primary{background:#3370ff;border-color:#3370ff;color:#fff}
+  button.primary:hover{background:#2b5fd8}
+  .hint{font-size:11px;color:#8f959e;margin-top:6px}
+  #tip{font-size:12px;color:#d97706;background:#fdf3e3;border:1px solid #f5d9a8;border-radius:8px;padding:8px 10px;margin-bottom:10px}
+</style>
+</head>
+<body>
+  <h1>保存到提示词收藏夹</h1>
+  <div id="tip" style="display:none">未在页面中自动识别到提示词，请手动粘贴（也可以先粘贴提示词，再从页面复制）。</div>
+  <div class="thumb" id="thumb"><span class="empty">图片将自动保存</span></div>
+  <label>提示词</label>
+  <textarea id="prompt" placeholder="粘贴该图的提示词…"></textarea>
+  <label>负面提示词（可选）</label>
+  <input id="negative" placeholder="负面提示词，如：blurry, low quality">
+  <div class="row">
+    <div>
+      <label>来源</label>
+      <input id="source" value="Lovart" placeholder="Lovart / 哩布哩布 / 其他">
+    </div>
+    <div>
+      <label>分类（可选）</label>
+      <input id="category" placeholder="如：国潮插画">
+    </div>
+  </div>
+  <div class="hint">识别结果可以直接修改；确认后清单会先完成写入，再提交给桌面应用。没有图片时也可以保存为纯提示词卡片。</div>
+  <div class="actions">
+    <button id="cancel">取消</button>
+    <button id="save" class="primary">保存</button>
+  </div>
+  <script src="save.js"></script>
+</body>
+</html>

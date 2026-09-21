@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>提示词反推 - 设置</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- 头部 -->
+  <div class="popup-header">
+    <div class="popup-logo">
+      <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
+        <path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="white"/>
+      </svg>
+    </div>
+    <span class="popup-title">提示词反推</span><button id="btn-visual-search" type="button" title="以图搜图" style="margin-left:auto;border:0;border-radius:7px;padding:6px 9px;background:#6d28d9;color:#fff;cursor:pointer">以图搜图</button>
+  </div>
+
+  <!-- Tab 切换栏 -->
+  <div class="tab-bar">
+    <button class="tab-item active" data-tab="settings">
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      <span>设置</span>
+    </button>
+    <button class="tab-item" data-tab="favorites">
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+      <span>收藏夹</span>
+      <span class="tab-badge" id="fav-tab-badge" style="display:none">0</span>
+    </button>
+    <button class="tab-item" data-tab="enhance">
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="M5 5l14 14M19 5L5 19"/></svg>
+      <span>智能补全</span>
+    </button>
+    <button class="tab-item" data-tab="history"><span>历史记录</span><span class="tab-badge" id="history-tab-badge" style="display:none">0</span></button>
+    <button class="tab-item" data-tab="collector">
+      <span>采集图片</span>
+    </button>
+  </div>
+
+  <!-- 设置 Tab 内容 -->
+  <div class="tab-content active" id="tab-settings">
+  <div class="popup-content">
+    <label class="field-label">常用 API 配置</label>
+    <div class="api-profile-row">
+      <select class="select-field" id="api-profile-select"><option value="0">常用配置 1（未保存）</option><option value="1">常用配置 2（未保存）</option><option value="2">常用配置 3（未保存）</option><option value="3">常用配置 4（未保存）</option><option value="4">常用配置 5（未保存）</option></select>
+      <button type="button" class="btn-secondary" id="btn-profile-apply">应用</button>
+    </div>
+    <div class="api-profile-actions"><button type="button" class="textarea-toggle" id="btn-profile-save">保存当前到此槽位</button><button type="button" class="textarea-toggle danger-link" id="btn-profile-clear">清除此槽位</button></div>
+    <!-- 启用开关 -->
+    <div class="toggle-row">
+      <span class="toggle-label">启用插件</span>
+      <div class="toggle-switch" id="toggle-enabled">
+        <div class="toggle-knob"></div>
+      </div>
+    </div>
+
+    <!-- API Key -->
+    <label class="field-label">API Key</label>
+    <input type="password" class="input-field" id="api-key" placeholder="sk-••••••••••••••••••" />
+    <div class="field-hint">必填。保存在本地浏览器，扩展直接调用 AI，无需任何后端服务</div>
+
+    <!-- API Base URL (中转站) -->
+    <label class="field-label">API Base URL（中转站地址）</label>
+    <input type="text" class="input-field" id="api-base" placeholder="https://api.example.com/v1（留空使用官方）" />
+    <div class="field-hint">本地模型填写 http://127.0.0.1:8080/v1；API Key 可填 local。填写 local 也会自动映射到本地地址</div>
+
+    <!-- AI 模型选择 -->
+    <label class="field-label">AI 模型</label>
+    <div class="select-wrapper">
+      <select class="select-field" id="model-select"></select>
+      <span class="select-arrow">
+        <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+          <path d="M6 9l6 6l6-6" stroke="#52525B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+    </div>
+
+    <!-- 自定义模型（条件显示）-->
+    <div id="custom-model-wrapper" style="display: none;">
+      <label class="field-label">自定义模型名称（中转站）</label>
+      <input type="text" class="input-field" id="custom-model" placeholder="gpt-4o-2024-08-06" />
+      <div class="field-hint">填写中转站支持的模型 ID</div>
+    </div>
+
+    <!-- 提示词模板 -->
+    <div class="field-label-row"><label class="field-label">提示词模板</label><button type="button" class="textarea-toggle" data-toggle-textarea="prompt-template">展开</button></div>
+    <div class="template-picker"><select class="select-field" id="prompt-template-select"></select><button type="button" class="btn-secondary template-add" id="btn-add-template">＋新增</button><button type="button" class="btn-secondary template-remove" id="btn-remove-template">−删除</button></div>
+    <textarea class="textarea-field" id="prompt-template" placeholder="请描述这张图片的视觉特征、风格、构图、色彩、光影..."></textarea>
+    <div class="field-hint">用户自定义指令，支持 {{target_tool}} {{image_type}} {{language}} 变量</div>
+
+    <!-- 服务器状态 -->
+    <div class="server-status" id="server-status">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">检测中...</span>
+    </div>
+  </div>
+
+  <!-- 保存按钮 -->
+  <div class="save-bar">
+    <button class="save-btn" id="btn-save">保存设置</button>
+  </div>
+  </div><!-- /tab-settings -->
+
+  <!-- 收藏夹 Tab 内容 -->
+  <div class="tab-content" id="tab-favorites">
+    <!-- 容量状态条 -->
+    <div class="capacity-bar">
+      <div class="capacity-row">
+        <span class="capacity-label">已收藏</span>
+        <span class="capacity-count"><span id="fav-count">0</span><span class="max"> / 15</span></span>
+      </div>
+      <div class="capacity-track"><div class="capacity-fill" id="capacity-fill" style="width:0%"></div></div>
+    </div>
+    <!-- 满状态预警（默认隐藏） -->
+    <div class="capacity-warn-tip" id="capacity-warn" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" width="14" height="14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>收藏已满，删除部分后可继续收藏</span>
+    </div>
+    <!-- 收藏列表 -->
+    <div class="fav-list" id="fav-list"></div>
+    <!-- 空状态 -->
+    <div class="empty-state" id="fav-empty" style="display:none">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" width="32" height="32" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+      </div>
+      <div class="empty-title">还没有收藏的提示词</div>
+      <div class="empty-desc">在网页图片上反推提示词后，点击结果面板右上角的书签按钮即可保存到这里</div>
+      <div class="empty-steps">
+        <div class="empty-step"><span class="empty-step-num">1</span><span>鼠标悬停网页图片，点击「反推提示词」</span></div>
+        <div class="empty-step"><span class="empty-step-num">2</span><span>在结果面板右上角点击书签图标收藏</span></div>
+      </div>
+    </div>
+    <!-- 底部操作栏（满状态时显示清空） -->
+    <div class="popup-footer" id="fav-footer" style="display:none">
+      <button class="btn-secondary danger" id="btn-clear-fav">
+        <svg viewBox="0 0 24 24" fill="none" width="14" height="14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+        <span>清空收藏</span>
+      </button>
+    </div>
+  </div><!-- /tab-favorites -->
+
+  <div class="tab-content" id="tab-history">
+    <div class="capacity-bar"><div class="capacity-row"><span class="capacity-label">最近反推</span><span class="capacity-count"><span id="history-count">0</span><span class="max"> / 15</span></span></div></div>
+    <div class="fav-list" id="history-list"></div><div class="empty-state" id="history-empty"><div class="empty-title">还没有反推记录</div><div class="empty-desc">成功反推的提示词会自动保留最近 15 条</div></div>
+    <div class="popup-footer" id="history-footer"><button class="btn-secondary danger" id="btn-clear-history">清空历史记录</button></div>
+  </div>
+
+  <!-- 智能补全 Tab 内容 -->
+  <div class="tab-content" id="tab-enhance">
+    <div class="popup-content enhance-content">
+      <label class="field-label">参考图片 <span class="field-hint-inline">最多 8 张，第一张默认为主要修改对象</span></label>
+      <div class="image-drop-zone" id="image-drop-zone"><input type="file" id="image-file-input" accept="image/*" multiple hidden /><div class="image-drop-icon">＋</div><div>拖拽图片到这里，或点击选择</div><div class="field-hint">支持 JPG、PNG、WEBP；图片会在本地压缩后发送</div></div>
+      <div class="image-preview-list" id="image-preview-list"></div>
+      <div class="image-role-hint" id="image-role-hint">底图决定构图与环境，其他图片仅按修改需求引用。拖动图片可调整顺序。</div>
+      <label class="field-label">原版提示词 <span class="field-hint-inline">可选</span></label>
+      <textarea class="textarea-field enhance-input enhance-base-prompt" id="enhance-input" placeholder="粘贴需要保留并修改的完整原版提示词；没有原版提示词时可以留空"></textarea>
+      <div class="field-hint">这里是修改母稿。系统会尽量保留未被修改需求点名的内容。</div>
+      <label class="field-label enhance-request-label">修改需求</label>
+      <textarea class="textarea-field enhance-input enhance-request" id="enhance-request" placeholder="例如：把汽车替换成第 2 张参考图的滑板车，保留原构图、机位和光线；背景改成夜晚城市街道"></textarea>
+      <div class="field-hint">写清楚需要替换或调整的内容；参考图可用“第 2 张图”等方式指定。</div>
+
+      <button type="button" class="preserve-toggle" id="preserve-toggle" aria-expanded="false" aria-controls="preserve-wrap"><span class="preserve-toggle-icon">＋</span><span>添加必须保留项（可选）</span></button>
+      <div class="preserve-wrap" id="preserve-wrap" hidden>
+        <textarea class="textarea-field enhance-preserve" id="enhance-preserve" placeholder="例如：保留产品比例、人物姿态、机位、构图和光线方向"></textarea>
+        <div class="field-hint">只填写绝对不能变化的内容；如与修改需求直接冲突，以修改需求为准。</div>
+      </div>
+
+      <div class="enhance-actions"><button class="save-btn" id="btn-enhance">生成提示词</button><button class="btn-secondary" id="btn-history">历史</button></div>
+      <div class="enhance-status" id="enhance-status"></div>
+      <div class="enhance-progress" id="enhance-progress" style="display:none">
+        <div class="enhance-progress-head"><span id="enhance-progress-stage">正在准备</span><span id="enhance-progress-time">0 秒</span></div>
+        <div class="enhance-progress-track"><div class="enhance-progress-fill" id="enhance-progress-fill"></div></div>
+        <div class="enhance-progress-bottom"><span class="enhance-progress-hint">可以关闭弹窗，任务会继续在后台运行</span><button type="button" class="enhance-cancel" id="btn-cancel-enhance">取消生成</button></div>
+      </div>
+      <div class="enhance-result" id="enhance-result" style="display:none">
+        <div class="result-toolbar"><button class="btn-secondary" id="btn-copy-full">复制完整提示词</button><button class="btn-secondary" id="btn-save-version">保存版本</button></div>
+        <div class="refine-row refine-top"><div class="refine-label">继续优化</div><input class="input-field" id="enhance-instruction" placeholder="例如：让画面更高级、更有商业广告感" /><button class="save-btn" id="btn-refine">优化</button></div>
+        <div class="field-label-row"><label class="field-label">完整提示词</label><button type="button" class="textarea-toggle" data-toggle-textarea="enhance-full-prompt">展开</button></div><textarea class="textarea-field result-full" id="enhance-full-prompt"></textarea>
+      </div>
+      <div class="enhance-history" id="enhance-history" style="display:none"></div>
+    </div>
+  </div><!-- /tab-enhance -->
+
+  <div class="tab-content" id="tab-collector">
+    <div class="popup-content collector-content">
+      <div class="collector-head"><div><label class="field-label">网页图片采集</label><div class="field-hint">扫描当前页面，选择图片后录入提示词收藏夹</div></div><button class="save-btn collector-scan-btn" id="btn-scan-page">扫描当前页面</button></div>
+      <div class="collector-status" id="collector-status">点击扫描，列出当前页面可见图片。</div>
+      <div class="collector-grid" id="collector-grid"></div>
+    </div>
+  </div><!-- /tab-collector -->
+
+  <script src="../lib/config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

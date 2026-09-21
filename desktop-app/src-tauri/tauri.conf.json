@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "提示词收藏夹",
+  "version": "1.1.0",
+  "identifier": "com.promptvault.app",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "提示词收藏夹 · Prompt Vault",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2OTA0OTIyN0FBQjk4MkEKUldRcW1LdDZJa21RbHVlWTk5WjRCQ3REYW9WS3RuTkQvMmdXdDZzbmRxdkUvVWYvallWTTMwSHUK",
+      "endpoints": ["https://github.com/zhaozhinan0707/prompt-vault/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  }
+}
+

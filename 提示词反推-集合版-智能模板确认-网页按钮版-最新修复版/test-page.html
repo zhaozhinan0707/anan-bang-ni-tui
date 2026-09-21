@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>提示词反推扩展 - 测试页面</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      padding: 40px 20px;
+    }
+    .container { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 32px; font-size: 14px; }
+    .info-box {
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+    .info-box strong { color: #1D4ED8; }
+    .info-box code {
+      background: #DBEAFE;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 24px;
+    }
+    .img-card {
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .img-card img {
+      width: 100%;
+      height: 220px;
+      object-fit: cover;
+      display: block;
+    }
+    .img-card .label {
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #52525B;
+    }
+    .img-small {
+      width: 100px;
+      height: 100px;
+      object-fit: cover;
+      border-radius: 8px;
+      display: block;
+      margin: 0 auto;
+    }
+    .small-section {
+      margin-top: 40px;
+      padding: 24px;
+      background: #fff;
+      border-radius: 12px;
+    }
+    .small-section h3 { font-size: 16px; margin-bottom: 12px; color: #52525B; }
+    .checklist {
+      margin-top: 40px;
+      padding: 24px;
+      background: #fff;
+      border-radius: 12px;
+    }
+    .checklist h3 { font-size: 16px; margin-bottom: 16px; }
+    .checklist ul { list-style: none; }
+    .checklist li {
+      padding: 8px 0;
+      font-size: 14px;
+      color: #52525B;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .checklist li::before {
+      content: '☐';
+      font-size: 18px;
+      color: #3B82F6;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>提示词反推扩展 - 测试页面</h1>
+    <p class="subtitle">将鼠标悬停在下方图片上，应该出现蓝色"反推提示词"悬浮按钮</p>
+
+    <div class="info-box">
+      <strong>使用步骤：</strong><br>
+      1. 确保已在 <code>chrome://extensions/</code> 加载扩展并启用<br>
+      2. 安装扩展后需要<strong>刷新此页面</strong>（content script 只在页面加载时注入）<br>
+      3. 鼠标悬停在下方任意大图上，等待蓝色按钮出现在图片右上方<br>
+      4. 点击按钮调用 AI 反推提示词（需要后端服务运行中）<br>
+      5. 按 <code>F12</code> 打开控制台可查看 <code>[提示词反推]</code> 日志
+    </div>
+
+    <div class="gallery">
+      <div class="img-card">
+        <img src="https://images.unsplash.com/photo-1682687982501-1e58ab814714" alt="测试图1" crossorigin="anonymous">
+        <div class="label">Unsplash 大图 - 鼠标悬停测试</div>
+      </div>
+      <div class="img-card">
+        <img src="https://images.unsplash.com/photo-1682687982501-1e58ab814714" alt="测试图2" crossorigin="anonymous">
+        <div class="label">Unsplash 大图 - 鼠标悬停测试</div>
+      </div>
+      <div class="img-card">
+        <img src="https://images.unsplash.com/photo-1682687982501-1e58ab814714" alt="测试图3" crossorigin="anonymous">
+        <div class="label">Unsplash 大图 - 鼠标悬停测试</div>
+      </div>
+    </div>
+
+    <div class="small-section">
+      <h3>小图片（&lt;80px，不会显示悬浮按钮）</h3>
+      <img class="img-small" src="https://images.unsplash.com/photo-1682687982501-1e58ab814714" alt="小图" crossorigin="anonymous">
+    </div>
+
+    <div class="checklist">
+      <h3>故障排查清单</h3>
+      <ul>
+        <li>扩展是否已在 chrome://extensions/ 中启用？</li>
+        <li>安装扩展后是否刷新了当前页面？</li>
+        <li>按 F12 打开控制台，是否能看到 [提示词反推] 日志？</li>
+        <li>图片是否大于 80×80 像素？</li>
+        <li>当前页面是否是 chrome:// 内部页面？（内部页面不支持 content script）</li>
+        <li>悬浮按钮可能被网站的高 z-index 元素遮挡，检查是否有遮挡</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

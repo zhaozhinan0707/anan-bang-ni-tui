@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>提示词收藏夹 · 桌面应用 UI 原型</title>
+<style>
+  :root{
+    --bg:#f2f3f5; --panel:#ffffff; --line:#e4e6eb; --line-2:#d0d3da;
+    --txt:#1f2329; --txt-2:#646a73; --txt-3:#8f959e;
+    --accent:#3370ff; --accent-soft:#e8f0ff; --danger:#d54941; --danger-soft:#fdeaea;
+    --warn:#d97706; --warn-soft:#fdf3e3; --ok:#1d9e75; --ok-soft:#e6f6f0;
+    --purple:#6b4fd8; --purple-soft:#f0edfc;
+    --radius:10px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:13px}
+  .app{display:flex;flex-direction:column;width:100vw;height:100vh;max-width:none;margin:0;background:var(--bg);overflow:hidden}
+
+  /* ── 顶部标题栏（仿桌面窗口） ── */
+  .titlebar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);user-select:none}
+  .tb-title{font-size:12px;color:var(--txt-2);font-weight:500}
+  .tb-title b{color:var(--txt)}
+  .tb-spacer{flex:1}
+  .sync-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:20px;background:var(--warn-soft);color:var(--warn);border:1px solid #f5d9a8;cursor:pointer;user-select:none}
+  .sync-badge .dot{width:7px;height:7px;border-radius:50%;background:var(--warn);display:inline-block}
+  .sync-badge.ok{background:var(--ok-soft);color:var(--ok);border-color:#bfe6d8}
+  .sync-badge.ok .dot{background:var(--ok)}
+  .sync-badge.off{background:var(--danger-soft);color:var(--danger);border-color:#f5c4c1}
+  .sync-badge.off .dot{background:var(--danger)}
+
+  /* ── 主体布局 ── */
+  .main{flex:1;display:flex;overflow:hidden}
+  .sidebar{width:210px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:10px 8px;gap:2px;overflow-y:auto}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;cursor:pointer;color:var(--txt-2);font-size:13px}
+  .nav-item:hover{background:#f5f6f7}
+  .nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:500}
+  .nav-item .count{margin-left:auto;font-size:11px;color:var(--txt-3);background:#f0f1f3;border-radius:10px;padding:1px 7px}
+  .nav-item.active .count{background:#d6e4ff;color:var(--accent)}
+  .nav-ic{width:16px;height:16px;flex:none}
+  .side-divider{height:1px;background:var(--line);margin:8px 6px}
+  .side-label{font-size:11px;color:var(--txt-3);padding:4px 10px;letter-spacing:.5px}
+  .cat{margin:1px 0}
+  .cat .nav-item{padding-left:26px}
+  .cat.active .nav-item{background:var(--purple-soft);color:var(--purple)}
+  .cat.active .nav-item .count{background:#ddd3f5;color:var(--purple)}
+  .cat-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cat-del{display:none;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:13px;color:var(--txt-3);cursor:pointer;line-height:1}
+  .cat-del:hover{background:#fdeaea;color:var(--danger)}
+  .cat:hover .cat-del{display:inline-flex}
+  .cat.active .cat-del{display:inline-flex}
+  .add-chip{color:var(--accent);border-style:dashed}
+  .add-chip:hover{background:var(--accent-soft)}
+  .add-cat{margin-top:6px;border:1px dashed var(--line-2);border-radius:8px;padding:6px;text-align:center;color:var(--txt-3);font-size:12px;cursor:pointer}
+  .add-cat:hover{color:var(--accent);border-color:var(--accent)}
+
+  /* ── 内容区 ── */
+  .content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .search{flex:1;max-width:360px;display:flex;align-items:center;gap:8px;background:#f5f6f7;border:1px solid transparent;border-radius:8px;padding:6px 10px}
+  .search:focus-within{border-color:var(--accent);background:#fff}
+  .search input{border:none;outline:none;background:transparent;font-size:13px;width:100%;color:var(--txt)}
+  .search svg{width:14px;height:14px;fill:var(--txt-3);flex:none}
+  .chip{padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);background:#fff;color:var(--txt-2);font-size:12px;cursor:pointer;white-space:nowrap}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .tool-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line-2);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .icon-btn:hover{border-color:var(--accent)}
+  .icon-btn svg{width:16px;height:16px;fill:var(--txt-2)}
+  .icon-btn:hover svg{fill:var(--accent)}
+
+  /* ── 卡片网格 ── */
+  .grid-wrap{flex:1;overflow-y:auto;padding:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
+  .card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .12s,border-color .12s;aspect-ratio:1/1}
+  .card:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .card .img{width:100%;height:calc(100% - 0px);display:block;background:#f3f2f8}
+  .card .img svg{width:100%;height:100%;display:block}
+  .card .img img{width:100%;height:100%;object-fit:cover;display:block}
+  .noimg-card{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:4px;background:repeating-linear-gradient(45deg,#f3f2f8,#f3f2f8 8px,#ebeaef 8px,#ebeaef 16px);
+    color:#9894ad;font:12px -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;text-align:center;padding:6px}
+  .noimg-icon{font-size:24px;line-height:1}
+  .noimg-tip{font-size:12px;font-weight:500;color:#787591}
+  .noimg-act{font-size:10px;color:#a5a3bb}
+  .card .hover-info{position:absolute;left:0;right:0;bottom:0;padding:22px 10px 8px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff;font-size:11px;opacity:0;transition:opacity .15s}
+  .card:hover .hover-info{opacity:1}
+  .hover-info .h-tag{display:inline-block;background:rgba(255,255,255,.22);padding:1px 7px;border-radius:10px;margin-bottom:4px;font-size:10px}
+  .conflict-flag{position:absolute;top:8px;left:8px;background:#d54941;color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;display:flex;align-items:center;gap:4px}
+  .favorite-flag{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.9);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;color:#e64340}
+  .btn.fav-on{background:#fdecec;border-color:#e64340;color:#e64340}
+  .btn.fav-on:hover{background:#fbdcdc}
+  .card .cat-label{position:absolute;bottom:8px;left:8px;background:rgba(255,255,255,.92);color:var(--txt-2);font-size:10px;padding:2px 8px;border-radius:10px;display:none}
+  .card:hover .cat-label{display:block}
+
+  /* ── 空状态 ── */
+  .empty{padding:60px 20px;text-align:center;color:var(--txt-3)}
+  .empty .big{font-size:40px;margin-bottom:10px;color:#d5d8de}
+  .empty p{font-size:13px;margin-bottom:4px}
+  .empty small{font-size:12px}
+
+  /* ── 模态框 ── */
+  .mask{position:fixed;inset:0;background:rgba(20,24,32,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .mask.show{display:flex}
+  .modal{background:#fff;border-radius:14px;width:min(900px,92vw);max-height:86vh;overflow:auto;box-shadow:0 8px 40px rgba(0,0,0,.14)}
+  .modal.small{width:min(440px,92vw)}
+  .modal.settings{width:min(560px,92vw)}
+
+  /* 详情 */
+  .detail{display:flex;min-height:420px}
+  .detail .d-img{flex:1.1;background:#0f1115;display:flex;align-items:center;justify-content:center;min-height:340px}
+  .detail .d-img svg{width:100%;height:100%;max-height:560px;object-fit:contain}
+  .detail .d-img img{width:100%;height:100%;max-height:560px;object-fit:contain}
+  .detail .d-side{flex:1;display:flex;flex-direction:column;padding:18px 20px;gap:12px;overflow-y:auto}
+  .d-head{display:flex;align-items:center;gap:8px}
+  .d-head .chip{margin-left:0}
+  .share-badge{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .share-badge.shared{background:#e7f7ec;color:#1a9c4a}
+  .share-badge.local{background:#f0f0f5;color:#8a8796}
+  .btn.share-upload{border-color:#1a9c4a;color:#1a9c4a}
+  .btn.share-upload:hover{background:#e7f7ec}
+  .btn.share-upload:disabled{opacity:.55;cursor:default}
+  .d-close{margin-left:auto;background:none;border:none;font-size:20px;color:var(--txt-3);cursor:pointer;line-height:1}
+  .d-prompt{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;color:var(--txt);max-height:130px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .d-prompt-edit{width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;color:var(--txt);resize:vertical;font-family:inherit}
+  .btn-tiny{background:transparent;border:none;color:var(--txt-2);font-size:11px;cursor:pointer;padding:2px 6px;border-radius:4px;float:right;margin-top:-2px}
+  .btn-tiny:hover{background:#f0edff;color:#5b4ce8}
+  .d-actions{display:flex;gap:8px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;border:1px solid var(--line-2);background:#fff;font-size:12px;cursor:pointer;color:var(--txt)}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{background:#2b5fd8;color:#fff}
+  .btn.danger{color:var(--danger);border-color:#f0b8b5}
+  .btn.danger:hover{background:var(--danger-soft)}
+  .btn svg{width:13px;height:13px;fill:currentColor}
+  .d-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .d-meta .kv{background:#f7f8fa;border-radius:8px;padding:8px 10px}
+  .d-meta .kv .k{font-size:10px;color:var(--txt-3);margin-bottom:2px}
+  .d-meta .kv .v{font-size:12px;color:var(--txt);font-weight:500}
+  .cat-select{width:100%;border:1px solid var(--line-2);border-radius:6px;padding:3px 6px;font-size:12px;background:#fff;color:var(--txt);cursor:pointer;outline:none}
+  .cat-select:hover{border-color:var(--accent)}
+  .conflict-bar{background:var(--danger-soft);border:1px solid #f5c4c1;border-radius:8px;padding:8px 12px;font-size:12px;color:var(--danger);display:flex;align-items:center;gap:8px}
+  .conflict-bar .btn{margin-left:auto;border-color:var(--danger);color:var(--danger);padding:4px 10px;font-size:11px}
+  .ver-list{font-size:12px;display:flex;flex-direction:column;gap:6px}
+  .ver-row{display:flex;align-items:center;gap:8px;background:#f7f8fa;border-radius:8px;padding:7px 10px;cursor:pointer}
+  .ver-row:hover{border:1px solid var(--accent)}
+  .ver-row .vno{width:26px;height:26px;border-radius:6px;background:var(--purple-soft);color:var(--purple);display:flex;align-items:center;justify-content:center;font-weight:500;font-size:11px;flex:none}
+  .ver-row .vinfo{flex:1}
+  .ver-row .vinfo b{font-weight:500;font-size:12px;display:block}
+  .ver-row .vinfo span{font-size:11px;color:var(--txt-3)}
+  .ver-row .vtag{font-size:10px;color:var(--accent);background:var(--accent-soft);padding:1px 8px;border-radius:8px}
+  .section-title{font-size:12px;font-weight:500;color:var(--txt-2);margin-top:4px}
+
+  /* 冲突对比 */
+  .compare{display:flex;gap:0;min-height:420px}
+  .compare .side{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .compare .side.left{border-right:1px solid var(--line)}
+  .compare .side .c-img{background:#0f1115;border-radius:8px;display:flex;align-items:center;justify-content:center;min-height:180px}
+  .compare .side .c-img svg{width:100%;max-height:220px}
+  .compare .side .c-prompt{background:#f7f8fa;border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.6;max-height:110px;overflow:auto;word-break:break-all}
+  .compare .side .c-head{display:flex;align-items:center;gap:8px}
+  .compare .side .c-head .tag{font-size:10px;padding:2px 8px;border-radius:8px;font-weight:500}
+  .compare .side .c-head .tag.mine{background:var(--accent-soft);color:var(--accent)}
+  .compare .side .c-head .tag.theirs{background:var(--warn-soft);color:var(--warn)}
+  .compare .side .c-actions{display:flex;gap:8px;margin-top:auto}
+  .compare .side .c-actions .btn{flex:1}
+
+  /* 设置 */
+  .set-body{padding:18px 22px;display:flex;flex-direction:column;gap:16px}
+  .set-row{display:flex;flex-direction:column;gap:6px}
+  .set-row label{font-size:12px;font-weight:500}
+  .set-row .hint{font-size:11px;color:var(--txt-3)}
+  .input{display:flex;align-items:center;gap:8px;background:#f7f8fa;border:1px solid var(--line-2);border-radius:8px;padding:8px 12px}
+  .input input{border:none;outline:none;background:transparent;flex:1;font-size:13px;color:var(--txt);font-family:"Cascadia Mono",Consolas,monospace}
+  .input:focus-within{border-color:var(--accent);background:#fff}
+  .input .ph{color:var(--txt-3);font-size:12px}
+  .switch-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}
+  .switch-row:last-child{border-bottom:none}
+  .switch-row .sw-info b{font-size:13px;display:block}
+  .switch-row .sw-info span{font-size:11px;color:var(--txt-3)}
+  .switch{position:relative;width:38px;height:21px;border-radius:12px;background:#d0d3da;cursor:pointer;transition:background .15s;flex:none}
+  .switch::after{content:"";position:absolute;top:2.5px;left:2.5px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch.on{background:var(--accent)}
+  .switch.on::after{left:19.5px}
+  .btn.test{padding:8px 14px}
+  .test-result{margin-top:8px;font-size:12px;border-radius:8px;padding:8px 12px;display:none}
+  .test-result.show{display:block}
+  .test-result.warn{background:var(--warn-soft);color:var(--warn)}
+  .test-result.ok{background:var(--ok-soft);color:var(--ok)}
+
+  /* 保存弹窗（模拟扩展） */
+  .save-modal .s-head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .save-modal .s-head b{font-size:14px;font-weight:500}
+  .save-modal .s-body{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+  .s-imgrow{display:flex;gap:12px}
+  .s-thumb{width:88px;height:88px;border-radius:8px;overflow:hidden;flex:none;border:1px solid var(--line)}
+  .s-thumb svg{width:100%;height:100%}
+  .s-prompt textarea{width:100%;min-height:86px;border:1px solid var(--line-2);border-radius:8px;padding:10px;font-size:12px;line-height:1.6;resize:vertical;outline:none;font-family:inherit}
+  .s-prompt textarea:focus{border-color:var(--accent)}
+  .s-cats{display:flex;flex-wrap:wrap;gap:6px}
+  .cat-pill{font-size:11px;padding:4px 12px;border-radius:16px;border:1px solid var(--line-2);cursor:pointer;color:var(--txt-2)}
+  .cat-pill.active{background:var(--purple);border-color:var(--purple);color:#fff}
+  .s-foot{padding:12px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+  .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1f2329;color:#fff;font-size:12px;padding:9px 18px;border-radius:20px;z-index:99;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+
+  .toastbar{position:fixed;bottom:24px;right:24px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 16px;width:300px;z-index:40;box-shadow:0 6px 24px rgba(0,0,0,.08);display:none;gap:10px}
+  .toastbar.show{display:flex}
+  .toastbar .t-ic{width:30px;height:30px;border-radius:8px;background:var(--ok-soft);color:var(--ok);display:flex;align-items:center;justify-content:center;flex:none}
+  .toastbar .t-ic svg{width:16px;height:16px;fill:currentColor}
+  .toastbar .t-txt b{font-size:12px;display:block}
+  .toastbar .t-txt span{font-size:11px;color:var(--txt-3)}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#d0d3da;border-radius:4px}
+  ::-webkit-scrollbar-thumb:hover{background:#b4b9c0}
+  /* Prompt Vault 素材管理器视觉层 */
+  .titlebar{height:40px;padding:6px 14px;background:linear-gradient(90deg,#fff,#f7faff)}
+  .tb-title{font-size:13px}
+  .sidebar{width:220px;padding:12px 10px}
+  .nav-item{min-height:34px;padding:8px 10px}
+  .nav-ic{display:inline-flex;width:18px;justify-content:center;align-items:center;font-size:17px;line-height:1}
+  .toolbar{min-height:54px;padding:9px 16px;gap:8px}
+  .tool-right .icon-btn{width:32px;height:32px;border-radius:8px;color:var(--txt-2)}
+  .tool-right .icon-btn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .tool-right .icon-btn:hover{background:var(--accent-soft);border-color:#b7cdfd;color:var(--accent)}
+  .modal{max-width:calc(100vw - 24px);overflow-x:hidden}
+  #manualAddMask .s-body>div:first-child{min-width:0;flex-wrap:wrap}
+  #manualAddMask .s-body>div:first-child>div:nth-child(2){min-width:0;flex:1 1 220px!important}
+  #manualAddMask #manualCategory,#manualAddMask #manualTags{min-width:0;max-width:100%}
+  #manualAddMask .manual-category-select{flex:1;min-width:0;max-width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--txt);font-size:12px;box-sizing:border-box;cursor:pointer}
+  #manualAddMask .manual-category-select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  #manualAddMask .s-body>div:nth-child(2){flex-wrap:wrap}
+  @media(max-width:560px){
+    #manualAddMask .s-body>div:first-child>div:first-child{flex:1 1 100%!important}
+    #manualAddMask #manualImgBox{margin:0 auto}
+    #manualAddMask .s-body>div:first-child>div:nth-child(2){flex-basis:100%!important}
+    #manualAddMask .s-body>div:first-child>div:nth-child(2)>div{flex-wrap:wrap}
+    #manualAddMask #manualCategory,#manualAddMask #manualTags{flex:1 1 100%!important}
+  }
+  .search{max-width:380px}
+  .bulk-bar{display:flex;align-items:center;gap:8px;padding:8px 16px;background:#eef4ff;border-bottom:1px solid #d8e5ff;color:var(--accent)}
+  .bulk-bar span{margin-right:auto;font-size:12px}
+  .bulk-bar .btn{padding:5px 10px;font-size:11px}
+  .grid-wrap{padding:14px 16px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:14px}
+  .card{aspect-ratio:4/3;display:flex;flex-direction:column;background:#fff}
+  .card .img{height:68%;flex:none}
+  .card .card-summary{padding:8px 10px 9px;min-height:0;display:flex;flex-direction:column;gap:5px;background:#fff}
+  .card .card-prompt{font-size:11px;line-height:1.45;color:var(--txt);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .card .card-meta{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;color:var(--txt-3)}
+  .card .source-tag,.card .cat-tag{padding:2px 6px;border-radius:6px;background:#f1f5ff;color:var(--accent);white-space:nowrap}
+  .card .cat-tag{background:var(--purple-soft);color:var(--purple);overflow:hidden;text-overflow:ellipsis}
+  .card .card-check{position:absolute;top:8px;left:8px;width:20px;height:20px;accent-color:var(--accent);z-index:2}
+  .card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #cfe0ff}
+  .card .hover-info{display:none}
+  .card .cat-label{display:none}
+  .favorite-flag{top:8px;right:8px}
+  @media(max-width:1050px){.sidebar{width:190px}.grid{grid-template-columns:repeat(auto-fill,minmax(185px,1fr))}.chip[data-chip="liblib"],.chip[data-chip="lovart"]{display:none}}
+  @media(max-width:760px){.sidebar{width:56px;padding:10px 6px}.sidebar .nav-item{font-size:0;justify-content:center;padding:8px 0}.sidebar .nav-item .count,.sidebar .side-label,.sidebar .cat-name,.sidebar .cat-del,.sidebar .add-cat,.sidebar .side-divider{display:none}.content .toolbar{padding-left:10px}.search{max-width:none}.toolbar .chip{display:none}.tb-title{font-size:12px}.grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}.bulk-bar{overflow-x:auto;white-space:nowrap}}
+.mode-switch{display:flex;gap:3px;background:#f5f2ef;padding:3px;border-radius:8px;margin-left:16px}.mode-switch button{border:0;background:transparent;color:var(--txt-3);padding:5px 10px;border-radius:6px;cursor:pointer;font:inherit;font-size:12px}.mode-switch .mode-active{background:#fff;color:var(--accent);box-shadow:0 1px 4px #00000012}</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- 桌面窗口标题栏 -->
+  <div class="titlebar">
+    <div class="tb-title"><b>提示词收藏夹</b> · Prompt Vault</div>
+    <div class="tb-spacer"></div>
+    <div id="syncBadge" class="sync-badge" role="button" tabindex="0" onclick="syncFromBadge()" title="点击同步"><span class="dot"></span><span id="syncText">共享盘未配置</span></div>
+  </div>
+
+  <div class="main">
+    <!-- 左侧栏 -->
+    <aside class="sidebar">
+      <div class="nav-item active" data-nav="all"><span class="nav-ic">▦</span>全部素材<span class="count">0</span></div>
+      <div class="nav-item" data-nav="recent-add"><span class="nav-ic">◷</span>最近添加<span class="count">0</span></div>
+      <div class="nav-item" data-nav="favorite"><span class="nav-ic">▱</span>我的收藏<span class="count">0</span></div>
+      <div class="nav-item" data-nav="recent"><span class="nav-ic">↺</span>最近删除<span class="count">0</span></div>
+      <div class="side-divider"></div>
+      <div class="side-label">分类</div>
+      <div class="cat" data-cat="uncat"><div class="nav-item"><span class="cat-name">未分类</span><span class="count" id="uncatCount">0</span></div></div>
+      <div id="catList"></div>
+      <div class="add-cat" onclick="addCategory()">+ 新建分类</div>
+    </aside>
+
+    <!-- 内容区 -->
+    <section class="content">
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 16 16"><path d="M11.7 10.6a6 6 0 1 0-.9.9l3 3 .9-.9-3-3zM6 10.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+          <input id="searchInput" placeholder="搜索提示词、标签…">
+        </div>
+        <div class="chip" data-chip="lovart">Lovart</div>
+        <div class="chip" data-chip="liblib">哩布哩布</div>
+        <div class="chip" id="chipFav">书签 收藏</div>
+        <div class="chip" id="btnSelectMode">选择</div>
+        <div class="chip add-chip" id="btnAddSource">+ 新增来源</div>
+        <div class="tool-right">
+          <button class="btn primary test" id="btnManualAdd" title="手动录入图片 + 提示词生成卡片" style="margin-right:4px">＋ 手动录入</button>
+          <div class="icon-btn" id="btnScan" title="扫描入库" aria-label="扫描入库">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
+          </div>
+          <div class="icon-btn" id="btnSettings" title="设置" aria-label="设置">
+            <svg viewBox="0 0 16 16"><path d="M8 10.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zm6.4-3.1a6.8 6.8 0 0 0-.1-.9l1.3-1a.5.5 0 0 0 .1-.7l-1.3-2.2a.5.5 0 0 0-.6-.2l-1.5.6a6.5 6.5 0 0 0-1.6-.9L10.3 0H7.7l-.4 1.3a6.5 6.5 0 0 0-1.6.9l-1.5-.6a.5.5 0 0 0-.6.2L2.3 4a.5.5 0 0 0 .1.7l1.3 1c0 .3-.1.6-.1.9s0 .6.1.9l-1.3 1a.5.5 0 0 0-.1.7l1.3 2.2c.1.2.4.3.6.2l1.5-.6c.5.4 1 .7 1.6.9l.4 1.3h2.6l.4-1.3c.6-.2 1.1-.5 1.6-.9l1.5.6c.2.1.5 0 .6-.2l1.3-2.2a.5.5 0 0 0-.1-.7l-1.3-1a6.8 6.8 0 0 0 .1-.9z"/></svg>
+          </div>
+        </div>
+      </div>
+ <div class="bulk-bar" id="bulkBar" style="display:none"><span><b id="bulkCount">0</b> 项已选择</span><button class="btn" id="bulkAll">全选</button><button class="btn" id="bulkCategory">批量分类</button><button class="btn" id="bulkFav">收藏</button><button class="btn" id="bulkUpload">上传共享盘</button><button class="btn danger" id="bulkDelete">删除</button><button class="btn" id="bulkCancel">取消</button></div>
+      <div class="grid-wrap">
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="empty" style="display:none">
+          <div class="big">◫</div>
+          <p>还没有符合条件的卡片</p>
+          <small>在 Chrome 中右键图片，选择「保存到提示词收藏夹」即可采集</small>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- 详情弹窗 -->
+<div class="mask" id="detailMask">
+  <div class="modal" id="detailModal"></div>
+</div>
+
+<!-- 手动录入弹窗（display 由 .mask / .mask.show 控制，不能加内联 display:none，否则 show 类盖不住） -->
+<div class="mask" id="manualAddMask">
+  <div class="modal small save-modal">
+    <div class="s-head">
+      <b>手动录入卡片</b>
+      <button class="d-close" onclick="closeManualAdd()">×</button>
+    </div>
+    <div class="s-body">
+      <div style="display:flex;gap:12px">
+        <div style="flex:0 0 150px">
+          <div id="manualImgBox" onclick="document.getElementById('manualImgInput').click()" style="width:150px;height:150px;border:1px dashed var(--line-2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--txt-3);font-size:12px;overflow:hidden;background:#fafbfc">
+            点击选择图片<br>（jpg/png/webp/gif）
+          </div>
+          <input type="file" id="manualImgInput" accept="image/*" style="display:none" onchange="onManualImgPick(event)">
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;min-width:0">
+          <textarea id="manualPrompt" placeholder="提示词（正）…" style="width:100%;min-height:90px;resize:vertical;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-family:inherit;box-sizing:border-box"></textarea>
+          <textarea id="manualNegPrompt" placeholder="负向提示词（可选）…" style="width:100%;min-height:50px;resize:vertical;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-family:inherit;box-sizing:border-box"></textarea>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="manualCategory" class="manual-category-select" aria-label="选择分类"></select>
+            <input id="manualTags" placeholder="标签（逗号分隔，可选）" style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:12px;box-sizing:border-box">
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
+        <button class="btn test" onclick="closeManualAdd()">取消</button>
+        <button class="btn primary test" id="btnManualSave" onclick="submitManualAdd()">保存为卡片</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 设置弹窗 -->
+<div class="mask" id="settingsMask">
+  <div class="modal settings">
+    <div class="d-head" style="padding:16px 22px;border-bottom:1px solid var(--line)">
+      <b style="font-size:14px;font-weight:500">设置</b>
+      <button class="d-close" onclick="closeSettings()">×</button>
+    </div>
+    <div class="set-body">
+      <div class="set-row">
+        <label>共享盘路径（团队同步）</label>
+        <div class="input">
+          <input id="sharePath" placeholder="\\server\design\PromptVault" value="">
+          <span class="ph" id="pathState">未配置</span>
+        </div>
+        <div class="hint">团队同步中枢：填共享盘路径并「保存并启用」后，程序每 8 秒自动扫描导入团队卡片（图片与提示词自动复制到本机）。新装同事流程：填路径 → 保存并启用 → 点「立即从共享盘导入」。支持 UNC 网络路径（\\server\design\PromptVault）或盘符（Z:\PromptVault）。</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn test" onclick="testShare()">连接测试</button>
+          <button class="btn primary test" onclick="saveShare()">保存并启用</button>
+          <button class="btn test" onclick="scanSharedNow()">立即从共享盘导入</button>
+          <div class="test-result" id="testResult"></div>
+        </div>
+      </div>
+      <div class="set-row">
+        <label>采集暂存目录（收藏存放位置）</label>
+        <div class="input">
+          <input id="stagingPath" placeholder="如 D:\PromptVault-staging，留空则自动探测" value="">
+          <span class="ph" id="stagingState">自动</span>
+        </div>
+        <div class="hint">Chrome 扩展右键保存的「图片 + 提示词清单」写入此目录，桌面应用从这里入库。默认自动探测（下载目录下 PromptVault-staging），您可手动指定任意文件夹，改后记得告诉团队统一使用。</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn primary test" onclick="saveStaging()">保存目录</button>
+          <button class="btn test" onclick="scanStaging();closeSettings();showToast('正在扫描暂存目录…')">立即扫描入库</button>
+          <div class="test-result" id="stagingTest"></div>
+        </div>
+      </div>
+      <div class="switch-row">
+        <div class="sw-info"><b>本地保留原图</b><span>共享盘存压缩图（2048px），本地默认保留原始分辨率方便查看</span></div>
+        <div class="switch on" data-sw="origin" onclick="toggleSwitch(this)"></div>
+      </div>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+        <label>系统验收</label>
+        <div class="hint">在临时目录和内存数据库中检查采集提交、无图卡片、失败队列和旧库兼容，不会修改你的收藏数据。</div>
+        <button class="btn primary test" onclick="runAcceptanceTests()">运行验收测试</button>
+        <div class="test-result" id="acceptanceTest"></div>
+      </div>
+      <div class="switch-row">
+        <div class="sw-info"><b>只读模式</b><span>开启后仅可浏览与复制，防止误改团队库（默认全员可写）</span></div>
+        <div class="switch" data-sw="readonly" onclick="toggleSwitch(this)"></div>
+      </div>
+      <div class="switch-row">
+        <div class="sw-info"><b>全局快捷键</b><span>Alt+P 呼出主窗口（系统托盘常驻）</span></div>
+        <div class="switch on" data-sw="hotkey" onclick="toggleSwitch(this)"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 保存弹窗（模拟 Chrome 扩展采集确认） -->
+<div class="mask" id="saveMask">
+  <div class="modal small save-modal">
+    <div class="s-head"><b>保存到提示词收藏夹</b><button class="d-close" onclick="closeSave()">×</button></div>
+    <div class="s-body">
+      <div class="s-imgrow">
+        <div class="s-thumb" id="saveThumb"></div>
+        <div style="flex:1;font-size:12px;color:var(--txt-2);line-height:1.7">
+          已从页面自动识别提示词与图片<br>
+          来源：Lovart · 今天 21:15
+        </div>
+      </div>
+      <div class="s-prompt">
+        <div style="font-size:12px;font-weight:500;margin-bottom:6px">提示词</div>
+        <textarea id="savePromptText"></textarea>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:500;margin-bottom:6px">保存到分类</div>
+        <div class="s-cats">
+          <span class="cat-pill active" onclick="pickCat(this)">未分类</span>
+          <span class="cat-pill" onclick="pickCat(this)">国潮插画</span>
+          <span class="cat-pill" onclick="pickCat(this)">3D 渲染</span>
+          <span class="cat-pill" onclick="pickCat(this)">机甲风格</span>
+          <span class="cat-pill" onclick="pickCat(this)">产品海报</span>
+          <span class="cat-pill" onclick="pickCat(this)">水墨风</span>
+          <span class="cat-pill" onclick="pickCat(this)">宠物拟人</span>
+          <span class="cat-pill" onclick="pickCat(this)">赛博城市</span>
+        </div>
+      </div>
+    </div>
+    <div class="s-foot">
+      <button class="btn" onclick="closeSave()">取消</button>
+      <button class="btn primary" onclick="doSaveCard()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 新增来源弹窗 -->
+<div class="mask" id="addSourceMask">
+  <div class="modal small" style="padding:20px 22px">
+    <div style="font-size:14px;font-weight:500;margin-bottom:12px">新增提示词来源</div>
+    <div class="input"><input id="newSourceName" placeholder="来源名称，如：可灵、即梦…" value=""></div>
+    <div style="font-size:11px;color:var(--txt-3);margin-top:8px;line-height:1.7">添加后出现在来源筛选中，Chrome 扩展也会尝试按新来源识别页面结构自动抓取提示词。</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button class="btn" onclick="closeAddSource()">取消</button>
+      <button class="btn primary" onclick="doAddSource()">添加来源</button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除收藏夹确认 -->
+<div class="mask" id="confirmMask">
+  <div class="modal small" style="padding:20px 22px">
+    <div style="font-size:14px;font-weight:500;margin-bottom:8px">删除收藏夹？</div>
+    <div style="font-size:12px;color:var(--txt-2);line-height:1.7;margin-bottom:18px" id="confirmMsg"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn" onclick="closeConfirm()">取消</button>
+      <button class="btn danger" onclick="doDelCat()">删除收藏夹</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══ 存储层适配：浏览器预览模式（localStorage） / Tauri 桌面模式（invoke Rust 后端） ═══ */
+const IS_TAURI = typeof window !== "undefined" && !!window.__TAURI_INTERNALS__;
+const LS_KEY = "promptvault_cards";
+
+const API = (() => {
+  if (IS_TAURI) {
+    return {
+      loadCards: () => window.__TAURI__.core.invoke("get_cards"),
+      addCard: (c) => window.__TAURI__.core.invoke("add_card", { card: c }),
+      createCardManual: (p) => window.__TAURI__.core.invoke("create_card_manual", {
+        imageBase64: p.imageBase64,
+        imageExt: p.imageExt,
+        prompt: p.prompt,
+        negativePrompt: p.negativePrompt,
+        category: p.category,
+        tags: p.tags
+      }),
+      deleteCard: (id) => window.__TAURI__.core.invoke("delete_card", { cardId: id }),
+      restoreCard: (id) => window.__TAURI__.core.invoke("restore_deleted", { cardId: id }),
+      purgeCard: (id) => window.__TAURI__.core.invoke("purge_card", { cardId: id }),
+      toggleFav: (id, fav) => window.__TAURI__.core.invoke("toggle_fav", { cardId: id, fav: fav }),
+      setCardCategory: (id, category) => window.__TAURI__.core.invoke("set_card_category", { cardId: id, category: category }),
+      getCardImage: (id) => window.__TAURI__.core.invoke("get_card_image", { cardId: id }),
+      uploadCard: (id) => window.__TAURI__.core.invoke("upload_card", { cardId: id }),
+      getSharedIds: () => window.__TAURI__.core.invoke("get_shared_ids"),
+      getDeleted: () => window.__TAURI__.core.invoke("get_deleted"),
+      ingest: () => window.__TAURI__.core.invoke("ingest_staging"),
+      setSharePath: (p) => window.__TAURI__.core.invoke("set_share_path", { path: p }),
+      syncStatus: () => window.__TAURI__.core.invoke("get_sync_status"),
+      syncNow: () => window.__TAURI__.core.invoke("sync_now"),
+      createCategory: (n) => window.__TAURI__.core.invoke("create_category", { name: n }),
+      getCategories: () => window.__TAURI__.core.invoke("get_categories"),
+      scanShared: () => window.__TAURI__.core.invoke("scan_shared"),
+      stagingDir: () => window.__TAURI__.core.invoke("get_staging_dir"),
+      setStagingDir: (p) => window.__TAURI__.core.invoke("set_staging_dir", { path: p })
+      ,runAcceptanceTests: () => window.__TAURI__.core.invoke("run_acceptance_tests")
+    };
+  }
+  return {
+    loadCards: async () => {
+      try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; }
+      catch { return null; }
+    },
+    addCard: async (c) => {
+      const list = (await API.loadCards()) || CARDS;
+      list.unshift({ ...c, id: c.id || "c" + Date.now() });
+      localStorage.setItem(LS_KEY, JSON.stringify(list));
+      return list[0];
+    },
+    createCardManual: async (p) => {
+      // 浏览器预览模式：生成 data URL 卡片存 localStorage
+      const list = (await API.loadCards()) || CARDS;
+      const card = {
+        id: "c" + Date.now(),
+        prompt: p.prompt,
+        negative_prompt: p.negativePrompt || "",
+        source_tool: "手动录入",
+        category: p.category || "未分类",
+        tags: p.tags || "[]",
+        image_path: p.imageBase64,
+        params: "{}",
+        time: new Date().toLocaleString("zh-CN", { hour12: false }),
+        version: 1,
+        deleted: false,
+        conflict: false,
+        fav: false
+      };
+      list.unshift(card);
+      localStorage.setItem(LS_KEY, JSON.stringify(list));
+      return { ok: true, card };
+    },
+    ingest: async () => 0,
+    setSharePath: async (p) => { localStorage.setItem("sharePath", p); return { ok: true }; },
+    syncStatus: async () => ({ connected: false, path: localStorage.getItem("sharePath") || "", lastSync: null }),
+    syncNow: async () => ({ pushed: 0, pulled: 0, online: false }),
+    createCategory: async () => ({}),
+    getCategories: async () => [],
+    scanShared: async () => ({ ok: true, imported: 0 }),
+    toggleFav: async (id, fav) => { const c = CARDS.find(x => x.id === id); if (c) c.fav = fav; return { ok: true }; },
+    setCardCategory: async (id, category) => { const c = CARDS.find(x => x.id === id); if (c) c.cat = category; return { ok: true }; },
+    getCardImage: async () => ({ ok: false }),
+    uploadCard: async () => ({ ok: true }),
+    getSharedIds: async () => [],
+    stagingDir: async () => ({ configured: localStorage.getItem("stagingDir") || "", effective: localStorage.getItem("stagingDir") || "" }),
+    setStagingDir: async (p) => { localStorage.setItem("stagingDir", p); return { ok: true }; }
+    ,runAcceptanceTests: async () => ({ ok: true, results: [{name:"浏览器预览模式",ok:true,detail:"请使用正式桌面程序运行完整验收"}] })
+  };
+})();
+
+function normalizeCard(c){
+  const rawCat = c.cat || c.category || "uncat";
+  return {
+    ...c,
+    cat: rawCat === "未分类" ? "uncat" : rawCat,
+    tool: c.tool || c.sourceTool || "手动录入",
+    sourceTool: c.sourceTool || c.tool || "手动录入",
+    prompt: c.prompt || "",
+    fav: !!c.fav,
+    conflict: !!c.conflict,
+    // 后端 serde 输出 camelCase（imagePath），前端统一为 image_path
+    image_path: c.image_path || c.imagePath || "",
+    // 后端 Card 的 tags / params 是 JSON 字符串；前端保持一致，invoke addCard 才不会反序列化失败
+    tags: typeof c.tags === "string" ? c.tags : JSON.stringify(c.tags || []),
+    params: typeof c.params === "string" ? c.params : JSON.stringify(c.params || {})
+  };
+}
+
+/* HTML 转义（防止 prompt 中的尖括号/引号破坏页面） */
+function escapeHtml(s){
+  return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function formatTags(tags){
+  try {
+    const parsed = typeof tags === "string" ? JSON.parse(tags || "[]") : tags;
+    return Array.isArray(parsed) ? parsed.join("、") : String(parsed || "");
+  } catch (_) { return String(tags || ""); }
+}
+
+/* 提示词编辑：详情页内联编辑 */
+function toggleEditPrompt(id){
+  const view = document.getElementById(`promptViewWrap_${id}`);
+  const edit = document.getElementById(`promptEditWrap_${id}`);
+  const btn = document.getElementById(`editBtn_${id}`);
+  if (!view || !edit) return;
+  const isEditing = edit.style.display !== "none";
+  if (isEditing) {
+    // 切回查看模式
+    edit.style.display = "none";
+    view.style.display = "";
+    if (btn) btn.textContent = "✎ 编辑";
+  } else {
+    // 切换到编辑模式（把当前 prompt 同步到 textarea）
+    const ta = document.getElementById(`promptEdit_${id}`);
+    if (ta) ta.value = (CARDS.find(x => x.id === id) || {}).prompt || "";
+    edit.style.display = "";
+    view.style.display = "none";
+    if (btn) btn.textContent = "关闭编辑";
+    // 自动聚焦并全选
+    setTimeout(() => { if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 50);
+  }
+}
+async function savePromptEdit(id){
+  const ta = document.getElementById(`promptEdit_${id}`);
+  if (!ta) return;
+  const newPrompt = ta.value.trim();
+  // 找到原 card（保留 version / image_path / params 等字段）
+  const orig = CARDS.find(x => x.id === id) || deletedCache.find(x => x.id === id);
+  if (!orig) { showToast("找不到原卡片"); return; }
+  const updated = { ...orig, prompt: newPrompt };
+  // 后端 addCard 是 upsert，保留原 version 让 CAS 正确处理
+  const res = await API.addCard(updated).catch(() => null);
+  showToast(res ? "✓ 提示词已保存" : "保存失败，请重试");
+  // 同步 CARDS / deletedCache
+  const idx = CARDS.findIndex(x => x.id === id);
+  if (idx >= 0) CARDS[idx] = { ...CARDS[idx], prompt: newPrompt };
+  await refreshFromStore();
+  // 关闭详情再重开（重新渲染最新数据）
+  closeDetail();
+  openDetail(id);
+}
+
+/* 真实图片渲染：Tauri 模式下把本地绝对路径转为 asset 协议 URL 可显示 */
+function assetUrl(p){
+  if(!p) return "";
+  if(IS_TAURI && window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.convertFileSrc){
+    try { return window.__TAURI__.core.convertFileSrc(p); } catch(e){ return p; }
+  }
+  return p;
+}
+function imgHtml(c){
+  const src = assetUrl(c.image_path);
+  if (src) return `<img src="${src}" loading="lazy" alt="" onerror="this.outerHTML='<div class=&quot;noimg-card&quot;><div class=&quot;noimg-icon&quot;>▧</div><div class=&quot;noimg-tip&quot;>图片未找到</div><div class=&quot;noimg-act&quot;>可重新采集或删除</div></div>'">`;
+  return `<div class="noimg-card"><div class="noimg-icon">▧</div><div class="noimg-tip">图片未找到</div><div class="noimg-act">可重新采集或删除</div></div>`;
+}
+async function refreshFromStore(){
+  let stored = await API.loadCards();
+  // 注意：stored 可能是空数组（删除到最后一张），也必须清空 CARDS，否则旧卡片残留
+  if (Array.isArray(stored)) {
+    CARDS.length = 0;
+    CARDS.push(...stored.map(normalizeCard));
+  }
+  await updateAllCounts();
+  renderGrid();
+}
+async function scanStaging(){
+  const n = await API.ingest();
+  await refreshFromStore();
+  showToast(n > 0 ? `已从 staging 入库 ${n} 张卡片` : "staging 暂无新卡片（采集的清单在下载目录 PromptVault-staging）");
+}
+async function doSaveCard(){
+  const prompt = document.getElementById("savePromptText").value.trim();
+  if(!prompt){ showToast("请输入提示词"); return; }
+  const pill = document.querySelector(".cat-pill.active");
+  const category = pill && pill.textContent !== "未分类" ? pill.textContent : "";
+  await API.addCard({
+    prompt,
+    category,
+    sourceTool: "Lovart",
+    tags: [],
+    params: {},
+    time: new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+  });
+  closeSave();
+  await refreshFromStore();
+  showToast("已保存到收藏夹 ✓");
+}
+
+/* ── 示例卡片数据 ── */
+const CATS = { uncat:"未分类" };
+/* 分类名直接显示（文件夹分类模式下分类名即文件夹名），CATS 仅存特殊映射 */
+function catLabel(cat){ return (cat && CATS[cat]) || cat || "未分类"; }
+let CARDS = [
+  {id:"c1", cat:"guochao", tool:"Lovart", fav:true, conflict:false,
+   prompt:"Chinese ink painting style dragon, majestic and powerful, gold and red color scheme, flowing clouds, traditional patterns, high detail, 8k",
+   time:"08-14 21:15", params:{尺寸:"1024×1024", 风格:"Lovart v2"}},
+  {id:"c2", cat:"render", tool:"Lovart", fav:false, conflict:false,
+   prompt:"glassmorphism 3D render, translucent glass cubes, iridescent lighting, soft studio background, product visualization, octane render",
+   time:"08-14 20:41", params:{尺寸:"1024×1024", 风格:"Lovart v2"}},
+  {id:"c3", cat:"mecha", tool:"哩布哩布", fav:true, conflict:true,
+   prompt:"mecha warrior, white and orange armor, cinematic lighting, dynamic pose, detailed mechanical joints, anime style, masterpiece",
+   time:"08-13 18:02", params:{seed:"88421563", cfg:7.5, 采样器:"DPM++ 2M"}},
+  {id:"c4", cat:"poster", tool:"哩布哩布", fav:false, conflict:false,
+   prompt:"minimalist product poster, perfume bottle center, warm gradient background, soft shadows, premium brand feel, studio photography",
+   time:"08-13 15:26", params:{seed:"30211974", cfg:7, 采样器:"Euler a"}},
+  {id:"c5", cat:"ink", tool:"Lovart", fav:false, conflict:false,
+   prompt:"ink wash landscape painting, misty mountains, lone fisherman boat, negative space, poetic atmosphere, scroll painting style",
+   time:"08-12 22:10", params:{尺寸:"1024×1024"}},
+  {id:"c6", cat:"pet", tool:"Lovart", fav:false, conflict:false,
+   prompt:"cute cat samurai, wearing small armor, holding bamboo sword, chibi style, soft pastel colors, adorable expression, 4k",
+   time:"08-12 19:47", params:{尺寸:"1024×1024", 风格:"Lovart v2"}},
+  {id:"c7", cat:"cyber", tool:"哩布哩布", fav:false, conflict:false,
+   prompt:"cyberpunk city street at night, neon signs, rain reflections, futuristic cars, cinematic wide shot, purple and blue tones",
+   time:"08-11 23:32", params:{seed:"66510248", cfg:8, 采样器:"DPM++ SDE"}},
+  {id:"c8", cat:"guochao", tool:"Lovart", fav:false, conflict:false,
+   prompt:"chinese phoenix illustration, guochao style, vibrant red and teal, ornate feathers, symmetric composition, poster art",
+   time:"08-10 14:08", params:{尺寸:"1024×1024", 风格:"Lovart v2"}}
+];
+
+/* 卡片图片占位（扁平插画风格） */
+const ART = {
+  c1:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#7c2d12"/><path d="M40 150c30-70 90-90 120-40 10-50 30-70 40-75v65H40z" fill="#f59e0b"/><path d="M30 160h140l-20 25H50l-20-25z" fill="#dc2626"/><circle cx="120" cy="70" r="7" fill="#fbbf24"/><circle cx="140" cy="55" r="4" fill="#fbbf24"/><path d="M60 130c25-30 55-40 85-25" fill="none" stroke="#fed7aa" stroke-width="3" stroke-linecap="round"/></svg>`,
+  c2:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#eef2ff"/><rect x="45" y="45" width="110" height="110" rx="18" fill="none" stroke="#818cf8" stroke-width="4" opacity=".55"/><rect x="62" y="62" width="80" height="80" rx="12" fill="none" stroke="#6366f1" stroke-width="3" opacity=".7"/><rect x="78" y="78" width="48" height="48" rx="8" fill="#818cf8" opacity=".8"/><circle cx="150" cy="50" r="18" fill="#c7d2fe"/><circle cx="158" cy="42" r="8" fill="#a5b4fc"/></svg>`,
+  c3:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#1c1917"/><path d="M100 30l55 40v60l-55 40-55-40V70l55-40z" fill="#292524"/><path d="M100 45l42 31v46l-42 31-42-31V76l42-31z" fill="#78716c"/><rect x="88" y="82" width="24" height="36" rx="4" fill="#f97316"/><circle cx="100" cy="72" r="9" fill="#e7e5e4"/><circle cx="100" cy="72" r="4" fill="#1c1917"/><path d="M60 95l-18 12 18 14M140 95l18 12-18 14" stroke="#f97316" stroke-width="5" fill="none" stroke-linecap="round"/></svg>`,
+  c4:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#fff7ed"/><rect x="30" y="90" width="30" height="80" rx="4" fill="#d6a354"/><rect x="34" y="60" width="22" height="36" rx="8" fill="#c8a05e"/><rect x="120" y="70" width="50" height="100" rx="10" fill="#f6c87d"/><rect x="132" y="40" width="26" height="34" rx="6" fill="#e0b267"/><circle cx="160" cy="40" r="14" fill="#fda4af"/><circle cx="160" cy="40" r="6" fill="#e11d48"/><path d="M20 180h160" stroke="#d6d3d1" stroke-width="2"/></svg>`,
+  c5:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#f0f4f1"/><path d="M0 120c40-30 80-30 120-10s70-10 80-20v110H0z" fill="#94a3b8" opacity=".35"/><path d="M0 150c50-25 90-20 130 0s50 5 70-10v60H0z" fill="#64748b" opacity=".5"/><path d="M60 150v30M60 150c-8 8-8 18-2 26M60 150c8 8 8 18 2 26" stroke="#334155" stroke-width="2.5" fill="none" stroke-linecap="round"/><circle cx="140" cy="45" r="18" fill="#cbd5e1"/><path d="M95 110c15-25 45-30 65-15" stroke="#475569" stroke-width="3" fill="none" stroke-linecap="round" opacity=".6"/></svg>`,
+  c6:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#fdf2f8"/><circle cx="100" cy="90" r="40" fill="#fb923c"/><circle cx="100" cy="90" r="32" fill="#fdba74"/><path d="M78 78l-14-8M122 78l14-8" stroke="#f97316" stroke-width="5" fill="none" stroke-linecap="round"/><path d="M92 70h16l-3-6-5 3-5-3-3 6z" fill="#7c2d12"/><circle cx="90" cy="88" r="3.5" fill="#431407"/><circle cx="110" cy="88" r="3.5" fill="#431407"/><path d="M94 100q6 6 12 0" stroke="#431407" stroke-width="2.5" fill="none" stroke-linecap="round"/><rect x="78" y="112" width="44" height="16" rx="5" fill="#475569"/><path d="M120 120l14 6-8 4M80 120l-14 6 8 4" stroke="#475569" stroke-width="4" fill="none" stroke-linecap="round"/></svg>`,
+  c7:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#1e1b4b"/><rect x="20" y="60" width="160" height="10" fill="#312e81"/><rect x="20" y="60" width="160" height="3" fill="#6366f1"/><rect x="20" y="80" width="160" height="10" fill="#312e81"/><rect x="20" y="80" width="160" height="3" fill="#a855f7"/><rect x="20" y="100" width="160" height="10" fill="#312e81"/><rect x="20" y="100" width="160" height="3" fill="#22d3ee"/><rect x="20" y="120" width="160" height="10" fill="#312e81"/><rect x="20" y="120" width="160" height="3" fill="#f472b6"/><path d="M30 160q10-8 20 0t20 0 20 0 20 0 20 0 20 0 20 0 20 0" stroke="#818cf8" stroke-width="3" fill="none"/><rect x="42" y="132" width="8" height="12" fill="#e0e7ff"/><rect x="150" y="132" width="8" height="12" fill="#e0e7ff"/></svg>`,
+  c8:`<svg viewBox="0 0 200 200"><rect width="200" height="200" fill="#7f1d1d"/><path d="M100 30c30 25 30 55 0 80-30-25-30-55 0-80z" fill="#dc2626"/><path d="M100 60c20 18 20 38 0 55-20-17-20-37 0-55z" fill="#ef4444"/><path d="M70 100c10 30 50 30 60 0-15 20-45 20-60 0z" fill="#0d9488"/><path d="M82 118c6 22 30 22 36 0-9 14-27 14-36 0z" fill="#14b8a6"/><circle cx="100" cy="70" r="5" fill="#fbbf24"/><path d="M60 140l-16 30M140 140l16 30M100 150v25" stroke="#fbbf24" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M55 175h90" stroke="#fca5a5" stroke-width="3" stroke-linecap="round"/></svg>`
+};
+
+let currentCat = "all";
+let currentTool = null;
+let favFilter = false; // 收藏筛选（♥）
+let viewMode = "all";   // "all" | "recent"
+let deletedCache = [];  // 最近删除列表缓存
+let selectionMode = false;
+const selectedIds = new Set();
+
+/* 渲染网格 */
+async function renderGrid(){
+  const q = document.getElementById("searchInput").value.trim().toLowerCase();
+  let list = [];
+  if (viewMode === "recent") {
+    // 从后端拉取软删除列表
+    deletedCache = (await API.getDeleted().catch(() => [])) || [];
+    list = deletedCache;
+  } else if (viewMode === "recent-add") {
+    list = [...CARDS].sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+  } else {
+    list = CARDS;
+  }
+  list = list.filter(c => {
+    if(currentCat !== "all" && c.cat !== currentCat) return false;
+    if(currentTool && c.tool !== currentTool) return false;
+    if((favFilter || viewMode === "favorite") && !c.fav) return false;
+    const tags = String(c.tags || "").toLowerCase();
+    if(q && !(String(c.prompt || "") + " " + tags + " " + String(c.tool || "")).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const grid = document.getElementById("grid");
+  grid.innerHTML = list.map(c => `
+    <div class="card ${selectedIds.has(c.id) ? 'selected' : ''}" data-id="${c.id}" onclick="handleCardClick(event,'${c.id}')">
+      ${selectionMode ? `<input class="card-check" type="checkbox" ${selectedIds.has(c.id) ? 'checked' : ''} onclick="toggleSelected(event,'${c.id}')">` : ''}
+      <div class="img">${imgHtml(c)}</div>
+      ${c.conflict ? '<div class="conflict-flag">⚠ 冲突</div>' : ''}
+      ${c.fav ? '<div class="favorite-flag">♥</div>' : ''}
+      <div class="card-summary">
+        <div class="card-prompt">${escapeHtml(c.prompt || '暂无提示词')}</div>
+        <div class="card-meta"><span class="source-tag">${escapeHtml(c.tool || '手动录入')}</span><span class="cat-tag">${escapeHtml(catLabel(c.cat))}</span><span style="margin-left:auto">${isShared(c.id) ? '已同步' : ''}</span></div>
+      </div>
+    </div>`).join("");
+  document.getElementById("empty").style.display = list.length ? "none" : "flex";
+  updateBulkBar();
+}
+
+function handleCardClick(event, id){
+  if(selectionMode){ toggleSelected(event, id); return; }
+  openDetail(id);
+}
+function toggleSelected(event, id){
+  if(event) event.stopPropagation();
+  selectedIds.has(id) ? selectedIds.delete(id) : selectedIds.add(id);
+  renderGrid();
+}
+function updateBulkBar(){
+  const bar = document.getElementById("bulkBar");
+  if(!bar) return;
+  bar.style.display = selectionMode ? "flex" : "none";
+  document.getElementById("bulkCount").textContent = selectedIds.size;
+  document.getElementById("bulkDelete").textContent = viewMode === "recent" ? "恢复" : "删除";
+}
+function setSelectionMode(on){
+  selectionMode = on;
+  if(!on) selectedIds.clear();
+  document.getElementById("btnSelectMode").classList.toggle("active", on);
+  renderGrid();
+}
+
+/* 分类/工具筛选 */
+document.querySelectorAll(".cat").forEach(el => {
+  el.addEventListener("click", () => {
+    document.querySelectorAll(".cat").forEach(x => x.classList.remove("active"));
+    el.classList.add("active");
+    currentCat = el.dataset.cat;
+    viewMode = "all";
+    renderGrid();
+  });
+});
+/* 顶部视图切换（全部收藏 / 最近删除） */
+document.querySelectorAll(".nav-item[data-nav]").forEach(el => {
+  el.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item[data-nav]").forEach(x => x.classList.remove("active"));
+    el.classList.add("active");
+    viewMode = el.dataset.nav;
+    favFilter = viewMode === "favorite";
+    currentCat = "all";
+    document.querySelectorAll(".cat").forEach(x => x.classList.remove("active"));
+    renderGrid();
+  });
+});
+const TOOL_NAMES = { lovart:"Lovart", liblib:"哩布哩布" };
+function bindChip(el){
+  el.addEventListener("click", () => {
+    el.classList.toggle("active");
+    currentTool = el.classList.contains("active") ? (TOOL_NAMES[el.dataset.chip] || el.dataset.chip) : null;
+    renderGrid();
+  });
+}
+document.querySelectorAll(".chip[data-chip]").forEach(bindChip);
+// 收藏筛选 chip（♥）：切换 favFilter
+document.getElementById("chipFav").addEventListener("click", () => {
+  const el = document.getElementById("chipFav");
+  favFilter = !favFilter;
+  el.classList.toggle("active", favFilter);
+  el.style.color = favFilter ? "#e64340" : "";
+  el.style.borderColor = favFilter ? "#e64340" : "";
+  renderGrid();
+});
+document.getElementById("btnAddSource").addEventListener("click", openAddSource);
+ document.getElementById("searchInput").addEventListener("input", renderGrid);
+ document.getElementById("btnSelectMode").addEventListener("click", () => setSelectionMode(!selectionMode));
+ document.getElementById("bulkCancel").addEventListener("click", () => setSelectionMode(false));
+ document.getElementById("bulkAll").addEventListener("click", () => {
+   const visible = [...document.querySelectorAll('.card[data-id]')].map(el => el.dataset.id);
+   const allSelected = visible.length && visible.every(id => selectedIds.has(id));
+   visible.forEach(id => allSelected ? selectedIds.delete(id) : selectedIds.add(id));
+   renderGrid();
+ });
+ document.getElementById("bulkFav").addEventListener("click", async () => {
+   const ids = [...selectedIds];
+   for (const id of ids) { const c = CARDS.find(x => x.id === id); if (c) await API.toggleFav(id, !c.fav).catch(() => null); }
+   await refreshFromStore(); showToast("批量收藏操作完成");
+ });
+ document.getElementById("bulkCategory").addEventListener("click", async () => {
+   const ids = [...selectedIds];
+   if (!ids.length) return;
+   const name = window.prompt("输入目标分类名称，留空为未分类：", "");
+   if (name === null) return;
+   const category = name.trim() || "uncat";
+   if (category !== "uncat") await API.createCategory(category).catch(() => null);
+   let ok = 0;
+   for (const id of ids) { const r = await API.setCardCategory(id, category).catch(() => null); if (r && r.ok) ok++; }
+   setSelectionMode(false); await refreshFromStore(); await renderCategories(); showToast("已分类 " + ok + "/" + ids.length + " 张卡片");
+ });
+ document.getElementById("bulkUpload").addEventListener("click", async () => {
+   const ids = [...selectedIds]; let ok = 0;
+   for (const id of ids) { const r = await API.uploadCard(id).catch(() => null); if (r && r.ok) ok++; }
+   await refreshSharedIds(); renderGrid(); showToast("已上传 " + ok + "/" + ids.length + " 张卡片");
+ });
+ document.getElementById("bulkDelete").addEventListener("click", async () => {
+   const ids = [...selectedIds]; if (!ids.length) return;
+   const restoring = viewMode === "recent";
+   if (!window.confirm(restoring ? "确定恢复选中的 " + ids.length + " 张卡片吗？" : "确定将 " + ids.length + " 张卡片移至最近删除吗？")) return;
+   let ok = 0;
+   for (const id of ids) {
+     const r = restoring ? await API.restoreCard(id).catch(() => null) : await API.deleteCard(id).catch(() => null);
+     if (r && r.ok) ok++;
+   }
+   setSelectionMode(false); await refreshFromStore(); showToast((restoring ? "已恢复 " : "已删除 ") + ok + "/" + ids.length + " 张卡片");
+ });
+
+/* 新增来源 */
+function openAddSource(){
+  document.getElementById("newSourceName").value = "";
+  document.getElementById("addSourceMask").classList.add("show");
+  setTimeout(() => document.getElementById("newSourceName").focus(), 60);
+}
+function closeAddSource(){ document.getElementById("addSourceMask").classList.remove("show"); }
+function doAddSource(){
+  const name = document.getElementById("newSourceName").value.trim();
+  if(!name){ showToast("请输入来源名称"); return; }
+  if(Object.values(TOOL_NAMES).includes(name)){ showToast("该来源已存在"); return; }
+  closeAddSource();
+  const key = "src_" + Date.now();
+  TOOL_NAMES[key] = name;
+  const chip = document.createElement("div");
+  chip.className = "chip";
+  chip.dataset.chip = key;
+  chip.textContent = name;
+  bindChip(chip);
+  document.getElementById("btnAddSource").insertAdjacentElement("beforebegin", chip);
+  chip.classList.add("active");
+  currentTool = name;
+  renderGrid();
+  showToast(`来源「${name}」已添加并启用筛选`);
+}
+
+/* 删除收藏夹 */
+let pendingDel = null;
+function delCat(e, catId, catName){
+  e.stopPropagation();
+  pendingDel = { catId, catName };
+  const n = CARDS.filter(c => c.cat === catId).length;
+  document.getElementById("confirmMsg").textContent =
+    `收藏夹「${catName}」将被删除，其中 ${n} 张卡片将移至「未分类」。此操作会同步到团队，可通过「最近删除」恢复。`;
+  document.getElementById("confirmMask").classList.add("show");
+}
+function closeConfirm(){ document.getElementById("confirmMask").classList.remove("show"); }
+function doDelCat(){
+  const p = pendingDel; pendingDel = null;
+  if(p){
+    CARDS.forEach(c => { if(c.cat === p.catId) c.cat = "uncat"; });
+    const el = document.querySelector(`.cat[data-cat="${p.catId}"]`);
+    if(el) el.remove();
+    if(currentCat === p.catId){ currentCat = "all"; document.querySelector('.cat[data-cat="all"]').classList.add("active"); }
+    document.getElementById("uncatCount").textContent = CARDS.filter(c => c.cat === "uncat").length;
+    renderGrid();
+    showToast(`收藏夹「${p.catName}」已删除，卡片已移至未分类`);
+  }
+  closeConfirm();
+}
+
+/* 删除 / 恢复卡片（真实接入后端命令） */
+async function doDeleteCard(id){
+  closeDetail();
+  if (viewMode === 'recent') {
+    const res = await API.restoreCard(id).catch(() => null);
+    showToast(res && res.ok ? "已恢复卡片" : "恢复失败，请重试");
+  } else {
+    const res = await API.deleteCard(id).catch(() => null);
+    showToast(res && res.ok ? "已移至最近删除（30 天内可恢复）" : "删除失败，请重试");
+  }
+  await refreshFromStore();
+  await updateAllCounts();    // 同步刷新全部侧栏 count（含"全部收藏/最近删除/各分类"）
+  refreshCategoryCounts();    // 移除空分类
+  renderGrid();
+}
+
+/* 彻底删除（最近删除视图）：删数据库记录 + 本地图片文件，不可恢复 */
+async function doPurgeCard(id){
+  if (!window.confirm("彻底删除后无法恢复，将同时删除本地图片文件。确定删除这张卡片？")) return;
+  const res = await API.purgeCard(id).catch(() => null);
+  closeDetail();
+  showToast(res && res.ok ? "已彻底删除" : "删除失败，请重试");
+  await refreshFromStore();
+  await updateAllCounts();
+  refreshCategoryCounts();
+  renderGrid();
+}
+
+/* 新建分类：弹窗输入 → 调后端持久化 → 侧栏插入新节点并自动激活 */
+/* 从后端拉取分类列表，动态渲染侧栏分类（文件夹分类模式下，共享盘每个文件夹=分类） */
+let allCategories = []; // 全局分类名缓存（详情页改分类下拉用）
+async function renderCategories(){
+  const names = await API.getCategories().catch(() => []);
+  allCategories = [...new Set((names || []).map(n => String(n).trim()).filter(n => n && n !== "uncat" && n !== "all" && n !== "未分类"))];
+  const catList = document.getElementById("catList");
+  if (!catList) return;
+  catList.innerHTML = "";
+  for (const name of allCategories) {
+    const node = document.createElement("div");
+    node.className = "cat";
+    node.dataset.cat = name;
+    node.innerHTML = `<div class="nav-item"><span class="cat-name">${escapeHtml(name)}</span><span class="count">0</span><span class="cat-del" onclick="delCat(event,'${escapeHtml(name).replace(/'/g,"\\'")}','${escapeHtml(name).replace(/'/g,"\\'")}')">×</span></div>`;
+    node.addEventListener("click", () => {
+      document.querySelectorAll(".cat").forEach(x => x.classList.remove("active"));
+      node.classList.add("active");
+      currentCat = name;
+      viewMode = "all";
+      renderGrid();
+    });
+    catList.appendChild(node);
+  }
+  updateAllCounts();
+}
+
+/* 切换卡片分类（详情页下拉） */
+async function changeCategory(id, newCat){
+  const c = CARDS.find(x => x.id === id) || deletedCache.find(x => x.id === id);
+  if (!c) return;
+  const res = await API.setCardCategory(id, newCat).catch(() => null);
+  if (res && res.ok) {
+    c.cat = newCat;
+    c.category = newCat;
+    showToast(`✓ 已移动到「${catLabel(newCat)}」`);
+    renderGrid();
+    renderCategories(); // 刷新侧栏 count
+  } else {
+    showToast("移动失败，请重试");
+  }
+}
+
+/* 新建分类 */
+async function addCategory(){
+  const name = window.prompt("请输入新分类名称：", "");
+  if (name === null) return; // 用户取消
+  const trimmed = name.trim();
+  if (!trimmed) { showToast("名称不能为空"); return; }
+  // 后端持久化
+  const res = await API.createCategory(trimmed).catch(() => null);
+  if (res && res.ok === false) { showToast("保存失败，请重试"); return; }
+  await renderCategories();
+  showToast(`✓ 已新建分类「${trimmed}」`);
+}
+
+/* 刷新侧栏全部 count：全部收藏 / 最近删除 / 全部卡片 / 各分类 */
+async function updateAllCounts(){
+  // 全部卡片 / 各分类（基于 CARDS）
+  document.querySelectorAll(".cat[data-cat]").forEach(el => {
+    const cat = el.dataset.cat;
+    const cnt = el.querySelector(".count");
+    if (!cnt) return;
+    if (cat === "all") { cnt.textContent = CARDS.length; return; }
+    const n = CARDS.filter(c => (c.cat || "uncat") === cat).length;
+    cnt.textContent = n;
+  });
+  // 顶部 nav-item：全部收藏 = CARDS 数；最近删除 = 后端 list_deleted 数
+  const allEl = document.querySelector('.nav-item[data-nav="all"] .count');
+  if (allEl) allEl.textContent = CARDS.length;
+  const favEl = document.querySelector('.nav-item[data-nav="favorite"] .count');
+  if (favEl) favEl.textContent = CARDS.filter(c => c.fav).length;
+  const addEl = document.querySelector('.nav-item[data-nav="recent-add"] .count');
+  if (addEl) addEl.textContent = Math.min(CARDS.length, 20);
+  try {
+    const deleted = (await API.getDeleted()) || [];
+    const recEl = document.querySelector('.nav-item[data-nav="recent"] .count');
+    if (recEl) recEl.textContent = deleted.length;
+  } catch (e) { /* ignore */ }
+}
+
+/* 重算侧栏分类 count：count=0 的空分类自动移除（除了"全部卡片/未分类"） */
+function refreshCategoryCounts(){
+  const counts = {};
+  CARDS.forEach(c => { counts[c.cat || "uncat"] = (counts[c.cat || "uncat"] || 0) + 1; });
+  document.querySelectorAll(".cat[data-cat]").forEach(el => {
+    const cat = el.dataset.cat;
+    if (cat === "all") {
+      const cnt = el.querySelector(".count");
+      if (cnt) cnt.textContent = CARDS.length;
+      return;
+    }
+    const n = counts[cat] || 0;
+    const cnt = el.querySelector(".count");
+    if (cnt) cnt.textContent = n;
+    if (n === 0 && cat !== "uncat") el.remove(); // 空分类自动消失
+  });
+  const uncatEl = document.querySelector('.cat[data-cat="uncat"] .count');
+  if (uncatEl) uncatEl.textContent = counts["uncat"] || 0;
+}
+
+/* 复制图片到剪贴板：后端读字节 → dataURL → Blob → clipboard.write
+ * 注意：ClipboardItem 不支持 image/webp，需先用 canvas 转码成 png */
+async function copyImageFromCard(id){
+  try {
+    const r = await API.getCardImage(id).catch(() => null);
+    if (!r || !r.ok || !r.dataUrl) { showToast("该卡片没有图片"); return; }
+    let ct = r.contentType || "image/png";
+    let blob;
+    if (ct === "image/webp") {
+      // webp → png（ClipboardItem.write 不支持 webp）
+      blob = await webpDataUrlToPngBlob(r.dataUrl);
+      ct = "image/png";
+    } else {
+      const bin = atob(r.dataUrl.split(",")[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blob = new Blob([bytes], { type: ct });
+    }
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([new ClipboardItem({ [ct]: blob })]);
+      showToast("✓ 图片已复制到剪贴板");
+    } else {
+      showToast("当前环境不支持复制图片，请右键图片另存");
+    }
+  } catch (e) {
+    showToast("复制图片失败：" + (e && e.message ? e.message : e));
+  }
+}
+
+/* 将 webp dataURL 通过 canvas 转为 png Blob（ClipboardItem 仅支持 png/jpeg） */
+function webpDataUrlToPngBlob(dataUrl){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error("canvas.toBlob 返回空")), "image/png");
+    };
+    img.onerror = () => reject(new Error("webp 图片加载失败"));
+    img.src = dataUrl;
+  });
+}
+
+/* 收藏/取消收藏：爱心变红 + toast 反馈 */
+async function toggleFav(id){
+  const c = CARDS.find(x => x.id === id) || deletedCache.find(x => x.id === id);
+  if (!c) return;
+  const newFav = !c.fav;
+  const res = await API.toggleFav(id, newFav).catch(() => null);
+  if (res && res.ok) {
+    c.fav = newFav;
+    showToast(newFav ? "♥ 已收藏" : "已取消收藏");
+    // 更新详情弹窗里的按钮状态
+    const btn = document.getElementById("favBtn_" + id);
+    if (btn) {
+      btn.className = "btn" + (newFav ? " fav-on" : "");
+      btn.innerHTML = (newFav ? "♥ 已收藏" : "♡ 收藏");
+    }
+    // 同步到网格的爱心角标
+    const gridCard = document.querySelector(`.card[data-id="${id}"] .favorite-flag`);
+    if (gridCard) {
+      if (newFav) gridCard.style.display = "";
+      else gridCard.style.display = "none";
+    }
+  } else {
+    showToast("操作失败，请重试");
+  }
+}
+
+/* ── 共享盘手动上传 ── */
+let sharedIds = new Set(); // 已上传到共享盘的卡片 id 集合
+
+/* 刷新共享状态（从后端拉取已上传 id 列表） */
+async function refreshSharedIds(){
+  const ids = await API.getSharedIds().catch(() => []);
+  sharedIds = new Set(ids || []);
+  // 刷新详情弹窗里当前卡片的状态
+  const detail = document.querySelector(".detail");
+  if (detail && detail.dataset.cardId) {
+    updateShareBadge(detail.dataset.cardId);
+  }
+}
+function isShared(id){ return sharedIds.has(id); }
+
+/* 更新详情弹窗里的共享状态徽标 */
+function updateShareBadge(id){
+  const badge = document.getElementById("shareBadge_" + id);
+  if (!badge) return;
+  if (isShared(id)) {
+    badge.className = "share-badge shared";
+    badge.textContent = "✓ 已上传共享盘";
+  } else {
+    badge.className = "share-badge local";
+    badge.textContent = "仅本地";
+  }
+}
+
+/* 手动上传单卡到共享盘 */
+async function doUploadCard(id){
+  const btn = document.getElementById("uploadBtn_" + id);
+  if (btn) { btn.disabled = true; btn.textContent = "上传中…"; }
+  const res = await API.uploadCard(id).catch(e => ({ ok: false, reason: String(e) }));
+  if (btn) { btn.disabled = false; }
+  if (res && res.ok) {
+    sharedIds.add(id);
+    showToast("✓ 已上传到共享盘");
+    updateShareBadge(id);
+    renderGrid(); // 刷新网格共享角标
+    // renderGrid 只刷网格，详情弹窗里那个按钮文字还卡在「上传中…」——手动改成「上传完成」（绿色样式）
+    if (btn) btn.textContent = "上传完成";
+  } else {
+    showToast("上传失败：" + ((res && res.reason) || "请检查共享盘配置"));
+    if (btn) btn.textContent = "上传到共享盘";
+  }
+}
+
+/* 详情弹窗 */
+function openDetail(id){
+  const c = CARDS.find(x => x.id === id) || deletedCache.find(x => x.id === id);
+  const modal = document.getElementById("detailModal");
+  // 历史版本：动态根据 c.version 渲染（不再硬编码 v2/v1）
+  const verRows = (() => {
+    const rows = [];
+    const totalVersions = Math.max(c.version || 1, 1);
+    rows.push(`<div class="ver-row"><div class="vno">v${totalVersions}</div><div class="vinfo"><b>最新版本（您）</b><span>${c.time || ""}</span></div><span class="vtag">当前</span></div>`);
+    for (let v = totalVersions - 1; v >= 1; v--) {
+      rows.push(`<div class="ver-row"><div class="vno">v${v}</div><div class="vinfo"><b>历史版本</b><span>${c.time || ""}</span></div></div>`);
+    }
+    if (c.conflict) {
+      rows.push(`<div class="ver-row"><div class="vno">v?</div><div class="vinfo"><b>团队版本（小张）</b><span>${c.time || ""}</span></div><span class="vtag">待合并</span></div>`);
+    }
+    return rows.join("");
+  })();
+  modal.innerHTML = `
+    <div class="detail" data-card-id="${c.id}">
+      <div class="d-img">${imgHtml(c)}</div>
+      <div class="d-side">
+        <div class="d-head">
+          <div class="chip active">${escapeHtml(c.tool || '手动录入')}</div>
+          <span class="share-badge ${isShared(c.id) ? 'shared' : 'local'}" id="shareBadge_${c.id}">${isShared(c.id) ? '✓ 已上传共享盘' : '仅本地'}</span>
+          <span style="font-size:11px;color:var(--txt-3)">${c.time}</span>
+          <button class="d-close" onclick="closeDetail()">×</button>
+        </div>
+        ${c.conflict ? `<div class="conflict-bar">⚠ 此卡片存在两个本地版本
+          <button class="btn" onclick="openCompare('${c.id}')">对比合并</button></div>` : ""}
+        <div class="section-title">提示词 <button class="btn-tiny" onclick="toggleEditPrompt('${c.id}')" id="editBtn_${c.id}">✎ 编辑</button></div>
+        <div id="promptViewWrap_${c.id}">
+          <div class="d-prompt" id="promptView_${c.id}">${c.prompt ? escapeHtml(c.prompt) : '<span style="color:var(--txt-3);font-style:italic">暂无提示词，点上方编辑补充</span>'}</div>
+        </div>
+        <div id="promptEditWrap_${c.id}" style="display:none">
+          <textarea class="d-prompt-edit" id="promptEdit_${c.id}" placeholder="输入或修改提示词…" rows="6">${escapeHtml(c.prompt || "")}</textarea>
+          <div class="d-actions" style="margin-top:8px">
+            <button class="btn primary" onclick="savePromptEdit('${c.id}')">保存提示词</button>
+            <button class="btn" onclick="toggleEditPrompt('${c.id}')">取消</button>
+          </div>
+          <div class="kv"><div class="k">来源</div><div class="v">${escapeHtml(c.sourceTool || c.tool || '手动录入')}</div></div>
+          <div class="kv"><div class="k">标签</div><div class="v">${escapeHtml(formatTags(c.tags))}</div></div>
+          ${c.pageUrl ? `<div class="kv"><div class="k">来源页面</div><div class="v"><a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noreferrer">打开来源</a></div></div>` : ''}
+        </div>
+        <div class="d-actions">
+          <button class="btn primary" onclick="copyPrompt('${c.id}')"><svg viewBox="0 0 16 16"><path d="M4 2h8v1H4V2zm0 2h8v1H4V4zm0 2h8v1H4V6zm-1 8h8a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2z"/></svg>复制提示词</button>
+          <button class="btn" onclick="copyImageFromCard('${c.id}')"><svg viewBox="0 0 16 16"><path d="M2 2h7v7H2V2zm9 1v2h3v8H6v-3H4v5h12V3h-5z" transform="scale(.8) translate(2 2)"/></svg>复制图片</button>
+          <button class="btn ${c.fav ? 'fav-on' : ''}" id="favBtn_${c.id}" onclick="toggleFav('${c.id}')">${c.fav ? '♥ 已收藏' : '♡ 收藏'}</button>
+          <button class="btn share-upload" id="uploadBtn_${c.id}" onclick="doUploadCard('${c.id}')" ${isShared(c.id) ? 'disabled' : ''}>${isShared(c.id) ? '✓ 已上传' : '上传到共享盘'}</button>
+        </div>
+        <div class="section-title">参数</div>
+        <div class="d-meta">
+          ${(() => { try { return Object.entries(JSON.parse(c.params || "{}") || {}).map(([k,v]) => `<div class="kv"><div class="k">${k}</div><div class="v">${escapeHtml(String(v))}</div></div>`).join(""); } catch(e){ return ""; } })()}
+          <div class="kv"><div class="k">分类</div><div class="v">
+            <select class="cat-select" id="catSel_${c.id}" onchange="changeCategory('${c.id}', this.value)">
+              <option value="uncat" ${(!c.cat || c.cat === 'uncat') ? 'selected' : ''}>未分类</option>
+              ${(() => {
+                const opts = new Set(allCategories);
+                if (c.cat && c.cat !== 'uncat') opts.add(c.cat); // 当前分类也加入
+                return Array.from(opts).map(n => `<option value="${escapeHtml(n)}" ${c.cat === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+              })()}
+            </select>
+          </div></div>
+          <div class="kv"><div class="k">来源</div><div class="v">${c.tool}</div></div>
+        </div>
+        <div class="section-title">历史版本（${c.conflict ? "含冲突" : (c.version || 1) + " 个"}）</div>
+        <div class="ver-list">${verRows}</div>
+        <div class="d-actions" style="margin-top:4px">
+          <button class="btn ${viewMode === 'recent' ? 'primary' : 'danger'}" onclick="doDeleteCard('${c.id}')">${viewMode === 'recent' ? '恢复卡片' : '删除卡片'}</button>
+          ${viewMode === 'recent' ? `<button class="btn danger" onclick="doPurgeCard('${c.id}')">彻底删除</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("detailMask").classList.add("show");
+}
+function closeDetail(){ document.getElementById("detailMask").classList.remove("show"); }
+
+/* 冲突对比视图 */
+function openCompare(id){
+  const c = CARDS.find(x => x.id === id);
+  const modal = document.getElementById("detailModal");
+  modal.innerHTML = `
+    <div class="d-head" style="padding:14px 18px;border-bottom:1px solid var(--line)">
+      <b style="font-size:13px;font-weight:500">冲突对比 · ${catLabel(c.cat)}</b>
+      <button class="d-close" onclick="openDetail('${c.id}')" title="返回详情">←</button>
+      <button class="d-close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="compare">
+      <div class="side left">
+        <div class="c-head"><span class="tag mine">我的版本 · v2</span><span style="font-size:11px;color:var(--txt-3)">08-13 18:02</span></div>
+        <div class="c-img">${ART[c.id]}</div>
+        <div class="c-prompt">${c.prompt}</div>
+        <div class="c-actions"><button class="btn primary" onclick="resolveCompare('采用我的版本')">采用我的</button></div>
+      </div>
+      <div class="side">
+        <div class="c-head"><span class="tag theirs">团队版本 · v3（小张）</span><span style="font-size:11px;color:var(--txt-3)">08-13 19:40</span></div>
+        <div class="c-img">${ART.c3}</div>
+        <div class="c-prompt">mecha warrior, white and orange armor, cinematic lighting, dynamic pose, detailed mechanical joints, anime style, masterpiece, ultra detailed, war scene background</div>
+        <div class="c-actions"><button class="btn" onclick="resolveCompare('采用团队版本')">采用团队</button></div>
+      </div>
+    </div>
+    <div class="s-foot" style="border-top:1px solid var(--line)">
+      <button class="btn" onclick="resolveCompare('手动合并另存')">手动合并另存</button>
+      <span style="font-size:11px;color:var(--txt-3);margin-left:auto">败者版本将自动归档，不会丢失</span>
+    </div>`;
+}
+function resolveCompare(act){
+  closeDetail();
+  showToast(act + "已应用，变更将同步到团队");
+}
+
+/* 复制 */
+function copyPrompt(id){
+  const c = CARDS.find(x => x.id === id);
+  navigator.clipboard && navigator.clipboard.writeText(c.prompt);
+  showToast("提示词已复制 ✓");
+}
+
+/* Toast */
+let toastTimer;
+function showToast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2000);
+}
+
+/* 设置 */
+async function openSettings(){
+  document.getElementById("settingsMask").classList.add("show");
+  // 进入设置页时立即拉一次后端真实状态，刷新顶部徽标（避免与 setSharePath/saveShare 不同步）
+  await refreshSyncBadge();
+  // 填充共享盘路径
+  try {
+    const st = await API.syncStatus();
+    if (st && st.path) document.getElementById("sharePath").value = st.path;
+  } catch(e){}
+  // 填充暂存目录
+  try {
+    const s = await API.stagingDir();
+    if (s) {
+      document.getElementById("stagingPath").value = s.configured || "";
+      const el = document.getElementById("stagingState");
+      if (s.configured) { el.textContent = "已自定义"; }
+      else if (s.effective) { el.textContent = "自动：" + s.effective; }
+      else { el.textContent = "未找到"; }
+    }
+  } catch(e){}
+}
+function closeSettings(){ document.getElementById("settingsMask").classList.remove("show"); }
+document.getElementById("btnSettings").addEventListener("click", openSettings);
+document.getElementById("btnScan").addEventListener("click", scanStaging);
+document.getElementById("btnManualAdd").addEventListener("click", openManualAdd);
+document.querySelectorAll(".mask").forEach(m => m.addEventListener("click", e => { if(e.target === m) m.classList.remove("show"); }));
+
+/* ── 手动录入卡片：选择图片 + 提示词 → 后端生成卡片 ── */
+let manualImgDataUrl = ""; // 已选图片的 data URL
+function openManualAdd(){
+  manualImgDataUrl = "";
+  document.getElementById("manualPrompt").value = "";
+  document.getElementById("manualNegPrompt").value = "";
+  document.getElementById("manualCategory").value = "";
+  document.getElementById("manualTags").value = "";
+  const box = document.getElementById("manualImgBox");
+  box.innerHTML = "点击选择图片<br>（jpg/png/webp/gif）";
+  box.style.background = "#fafbfc";
+  // 使用程序内置下拉框，避免浏览器原生 datalist 弹出不可控的“保存的数据”样式
+  const categorySelect = document.getElementById("manualCategory");
+  categorySelect.innerHTML = '<option value="">未分类</option>' +
+    (allCategories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+  categorySelect.value = "";
+  document.getElementById("manualAddMask").classList.add("show");
+}
+function closeManualAdd(){
+  document.getElementById("manualAddMask").classList.remove("show");
+  manualImgDataUrl = "";
+}
+function onManualImgPick(e){
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    manualImgDataUrl = ev.target.result; // data:image/...;base64,xxx
+    const box = document.getElementById("manualImgBox");
+    box.innerHTML = `<img src="${manualImgDataUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;
+    box.style.background = "#fff";
+  };
+  reader.readAsDataURL(file);
+}
+async function submitManualAdd(){
+  const prompt = document.getElementById("manualPrompt").value.trim();
+  const neg = document.getElementById("manualNegPrompt").value.trim();
+  const cat = document.getElementById("manualCategory").value.trim();
+  const tagsRaw = document.getElementById("manualTags").value.trim();
+  if (!manualImgDataUrl) { showToast("请先选择图片"); return; }
+  if (!prompt) { showToast("请填写提示词"); return; }
+  const btn = document.getElementById("btnManualSave");
+  btn.disabled = true; btn.textContent = "保存中…";
+  // 图片扩展名从 data URL 提取（data:image/png;base64, → png）
+  const mime = (manualImgDataUrl.match(/^data:image\/(\w+);/) || [])[1] || "png";
+  const tags = tagsRaw ? JSON.stringify(tagsRaw.split(/[,，]/).map(s => s.trim()).filter(Boolean)) : "[]";
+  const res = await API.createCardManual({
+    imageBase64: manualImgDataUrl,
+    imageExt: mime,
+    prompt,
+    negativePrompt: neg,
+    category: cat,
+    tags
+  }).catch(e => ({ ok: false, reason: String(e) }));
+  btn.disabled = false; btn.textContent = "保存为卡片";
+  if (res && res.ok) {
+    closeManualAdd();
+    refreshFromStore();
+    renderCategories();
+    showToast("✓ 卡片已保存");
+  } else {
+    showToast("保存失败：" + ((res && res.reason) || "未知错误"), "err");
+  }
+}
+
+async function saveStaging(){
+  const v = document.getElementById("stagingPath").value.trim();
+  const r = document.getElementById("stagingTest");
+  const res = await API.setStagingDir(v);
+  r.classList.add("show");
+  r.className = "test-result show ok";
+  if (res && res.ok) {
+    r.textContent = v ? "已保存：采集将从该目录入库（留空可恢复自动探测）" : "已恢复自动探测";
+    document.getElementById("stagingState").textContent = v ? "已自定义" : "自动";
+    showToast("暂存目录已更新");
+  } else {
+    r.className = "test-result show warn";
+    r.textContent = "保存失败，请重试";
+  }
+}
+
+function toggleSwitch(el){
+  el.classList.toggle("on");
+  const name = el.dataset.sw;
+  const label = {origin:"本地原图保留", readonly:"只读模式", hotkey:"全局快捷键"}[name];
+  showToast(label + (el.classList.contains("on") ? "：已开启" : "：已关闭"));
+}
+
+/* 顶部共享盘徽标：根据后端真实状态显示（避免前后端状态不同步的假"已同步"） */
+function setSyncBadge(connected, path, outbox = 0, lastSync = ""){
+  const badge = document.getElementById("syncBadge");
+  const text = document.getElementById("syncText");
+  if (!badge || !text) return;
+  badge.title = lastSync ? "最近同步：" + lastSync : "共享盘状态";
+  if (connected && path) {
+    badge.className = "sync-badge ok";
+    text.textContent = "共享盘已连接";
+    badge.title = outbox > 0
+      ? `共享盘已连接，仍有 ${outbox} 项待处理；点击立即同步`
+      : "共享盘已连接；点击立即刷新同步状态";
+  } else {
+    badge.className = "sync-badge off";
+    text.textContent = "共享盘未连接";
+    badge.title = "请先配置共享盘路径";
+  }
+}
+async function syncFromBadge(){
+  const badge = document.getElementById("syncBadge");
+  const text = document.getElementById("syncText");
+  const before = await API.syncStatus().catch(() => null);
+  if (!before || !before.connected || !before.path) {
+    openSettings();
+    showToast("请先配置共享盘路径");
+    return;
+  }
+  badge.className = "sync-badge";
+  badge.style.pointerEvents = "none";
+  text.textContent = "同步中…";
+  const res = await API.syncNow().catch(e => ({ online:false, reason:String(e) }));
+  badge.style.pointerEvents = "";
+  if (res && res.online !== false) {
+    await refreshSyncBadge();
+    await refreshFromStore();
+    showToast(`同步完成：推送 ${res.pushed || 0} 项，拉取 ${res.pulled || 0} 项`);
+  } else {
+    badge.className = "sync-badge off";
+    text.textContent = "同步失败 · 点击重试";
+    badge.title = "共享盘不可用，点击重试";
+    showToast("同步失败，请检查共享盘连接");
+  }
+}
+async function refreshSyncBadge(){
+  const st = await API.syncStatus().catch(() => null);
+  if (st) setSyncBadge(!!st.connected, st.path || "", Number(st.outbox || 0), st.lastSync || "");
+}
+
+async function testShare(){
+  const v = document.getElementById("sharePath").value.trim();
+  const r = document.getElementById("testResult");
+  r.classList.add("show");
+  if(!v){
+    r.className = "test-result show warn";
+    r.textContent = "请先在输入框填入共享盘路径，然后点「保存并启用」再来测试连接。";
+    return;
+  }
+  // 测试连接 = 先把路径提交给后端，再以后端真实的 syncStatus 回显
+  // 这样确保测连通后端确实拿到了路径，不再出现"前端已连接、后端未配置"的不一致
+  await API.setSharePath(v).catch(() => null);
+  const st = await API.syncStatus().catch(() => null);
+  if (st && st.connected) {
+    r.className = "test-result show ok";
+    r.textContent = `✓ 连接成功：路径已写入后端并触发首轮同步（clientId ${(st.clientId||"").slice(0,8)}…）`;
+    document.getElementById("pathState").textContent = "已启用";
+    setSyncBadge(true, st.path || v);
+  } else {
+    r.className = "test-result show warn";
+    r.textContent = "后端未确认连接，请检查路径是否合法、是否可访问。";
+    setSyncBadge(false, "");
+  }
+}
+async function saveShare(){
+  const v = document.getElementById("sharePath").value.trim();
+  const st = document.getElementById("pathState");
+  const r = document.getElementById("testResult");
+  r.classList.add("show");
+  const res = await API.setSharePath(v).catch(() => null);
+  if(!v){
+    // 留空 = 主动清空后端 ShareState
+    st.textContent = "未配置";
+    r.className = "test-result show warn";
+    r.textContent = "已清空后端共享盘路径，恢复纯本地模式。";
+    setSyncBadge(false, "");
+    showToast("共享盘路径已清空（纯本地模式）");
+    return;
+  }
+  if (res && res.ok) {
+    st.textContent = "已启用";
+    r.className = "test-result show ok";
+    r.textContent = `✓ 已保存到后端：${res.path}`;
+    // 后端 set_share_path 会自动触发一次首轮 sync，拉一次 status 让徽标与 UI 完全一致
+    const st2 = await API.syncStatus().catch(() => null);
+    if (st2 && st2.connected) setSyncBadge(true, st2.path || v);
+    showToast("✓ 共享盘路径已保存并启用同步");
+  } else {
+    st.textContent = "保存失败";
+    r.className = "test-result show warn";
+    r.textContent = "后端保存失败，请重试或查看 Rust 端日志";
+    showToast("保存失败，请重试");
+  }
+}
+
+/* 手动触发一次共享盘扫描导入（新装同事点「立即从共享盘导入」） */
+async function scanSharedNow(){
+  const r = document.getElementById("testResult");
+  r.classList.add("show");
+  const st = await API.syncStatus().catch(() => null);
+  if (!st || !st.connected) {
+    r.className = "test-result show warn";
+    r.textContent = "请先在上方填入共享盘路径并「保存并启用」，再点导入。";
+    return;
+  }
+  const res = await API.scanShared().catch(e => ({ ok: false, imported: 0, reason: String(e) }));
+  if (res && res.ok) {
+    r.className = "test-result show ok";
+    r.textContent = `✓ 已从共享盘导入 ${res.imported || 0} 张卡片`;
+    refreshFromStore();
+    renderCategories();
+    refreshSharedIds();
+    showToast(`✓ 已从共享盘导入 ${res.imported || 0} 张卡片`);
+  } else {
+    r.className = "test-result show warn";
+    r.textContent = "导入失败：" + ((res && res.reason) || "请检查共享盘路径");
+  }
+}
+
+async function runAcceptanceTests(){
+  const box = document.getElementById("acceptanceTest");
+  box.className = "test-result show";
+  box.textContent = "正在运行验收测试…";
+  try {
+    const res = await API.runAcceptanceTests();
+    const lines = (res.results || []).map(x => `${x.ok ? "✓" : "✗"} ${x.name}：${x.detail}`).join("\n");
+    box.style.whiteSpace = "pre-line";
+    box.className = `test-result show ${res.ok ? "ok" : "warn"}`;
+    box.textContent = (res.ok ? "✓ 全部通过\n" : "✗ 有项目失败\n") + lines;
+  } catch (e) {
+    box.className = "test-result show warn";
+    box.textContent = "验收执行失败：" + (e && e.message ? e.message : e);
+  }
+}
+
+/* 保存弹窗（模拟扩展触发） */
+function openSave(){
+  document.getElementById("saveThumb").innerHTML = ART["c1"];
+  document.getElementById("savePromptText").value = CARDS[0].prompt;
+  document.getElementById("saveMask").classList.add("show");
+}
+function closeSave(){ document.getElementById("saveMask").classList.remove("show"); }
+function pickCat(el){
+  document.querySelectorAll(".cat-pill").forEach(x => x.classList.remove("active"));
+  el.classList.add("active");
+}
+
+/* 快捷键演示：Ctrl/Cmd+Shift+P 打开保存弹窗（模拟扩展） */
+document.addEventListener("keydown", e => {
+  if((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p"){
+    e.preventDefault(); openSave();
+  }
+});
+
+/* 首屏：弹出一次「如何采集」引导条 */
+window.addEventListener("load", () => {
+  setTimeout(() => showToast(IS_TAURI ? "工具栏「扫描入库」可读取 Chrome 扩展采集的 staging 清单" : "试用：按 Ctrl+Shift+P 模拟 Chrome 右键保存"), 600);
+  refreshFromStore();
+  renderCategories();
+  refreshSharedIds();
+  refreshSyncBadge(); // 顶部徽标同步后端真实状态
+  // 每 8 秒刷新（后端扫描共享盘文件夹 → 自动分类/导入，前端同步刷新界面）
+  setInterval(() => {
+    refreshFromStore();
+    renderCategories();
+    refreshSharedIds();
+    refreshSyncBadge();
+  }, 8000);
+});
+
+renderGrid();
+</script>
+</body>
+</html>
+
+
+

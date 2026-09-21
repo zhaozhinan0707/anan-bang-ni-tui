@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>提示词收藏夹 · 采集器</title>
+<style>
+  body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:#f7f8fa;margin:0;color:#1f2329;font-size:13px;width:560px}
+  .head{padding:12px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e4e6eb;background:#fff}
+  .head h1{font-size:14px;font-weight:500;margin:0;flex:1}
+  .head .ver{font-size:11px;color:#8f959e}
+  .scan-btn{display:flex;align-items:center;justify-content:center;gap:8px;margin:12px 14px;padding:11px;border-radius:9px;background:#3370ff;color:#fff;font-size:14px;cursor:pointer;border:none}
+  .scan-btn:hover{background:#2b5fd8}
+  .scan-btn:disabled{background:#9db9f5;cursor:default}
+  .opt-row{display:flex;align-items:center;gap:8px;padding:0 14px 10px;font-size:12px;color:#646a73}
+  .opt-row .spacer{flex:1}
+  .switch{position:relative;width:34px;height:19px;border-radius:999px;background:#d0d3da;cursor:pointer;transition:.18s;flex:none}
+  .switch.on{background:#1d9e75}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:.18s}
+  .switch.on::after{left:17px}
+  .status{margin:0 14px 10px;font-size:11px;color:#8f959e;background:#eef0f3;border-radius:8px;padding:8px 10px;line-height:1.6}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 14px 14px;max-height:420px;overflow:auto}
+  .cell{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1px solid #e4e6eb;background:#eef0f3;cursor:pointer}
+  .cell:hover{border-color:#3370ff;box-shadow:0 0 0 2px rgba(51,112,255,.25)}
+  .cell img{width:100%;height:100%;object-fit:cover;display:block}
+  .cell .tag{position:absolute;left:4px;bottom:4px;font-size:9px;background:rgba(0,0,0,.55);color:#fff;border-radius:4px;padding:1px 5px;max-width:calc(100% - 8px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cell .dot{position:absolute;right:4px;top:4px;width:8px;height:8px;border-radius:50%;background:#d97706;border:1px solid #fff}
+  .empty{padding:40px 0;text-align:center;color:#8f959e;font-size:12px}
+  .foot{display:flex;gap:8px;padding:0 14px 12px}
+  .foot button{flex:1;padding:8px;border-radius:8px;border:1px solid #d0d3da;background:#fff;font-size:12px;cursor:pointer}
+  .foot button:hover{border-color:#3370ff;color:#3370ff}
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>提示词收藏夹 · 采集器</h1>
+    <span class="ver">v0.2.1</span>
+  </div>
+
+  <button class="scan-btn" id="scanBtn">🔍 扫描当前页面图片</button>
+
+  <div class="opt-row">
+    <span>右键接管（哩布哩布等屏蔽右键的站点用）</span>
+    <span class="spacer"></span>
+    <span class="switch" id="rightclickSwitch" title="开启后劫持图片右键弹出保存菜单；关闭则不影响网站原生右键"></span>
+  </div>
+
+  <div class="status" id="status">点击「扫描当前页面图片」列出当前页面所有图片，点选要保存的图，即可编辑提示词并保存。</div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="foot">
+    <button id="manual">✎ 手动添加提示词</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

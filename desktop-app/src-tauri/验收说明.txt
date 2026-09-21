@@ -1,0 +1,38 @@
+Prompt Vault 自动化验收说明
+
+一、最简单的验收方法
+
+双击当前目录里的“验收测试.bat”。
+
+它会自动执行：
+1. cargo check
+2. cargo test
+
+窗口最后显示“验收通过”即可。
+
+二、命令行验收方法
+
+打开 PowerShell，执行：
+
+cd D:\codex\模糊提示词智能补全\prompt-vault\desktop-app\src-tauri
+$env:Path = "C:\Users\XC\.cargo\bin;$env:Path"
+cargo test
+
+看到“4 passed; 0 failed”表示当前自动化测试通过。
+
+三、测试源代码说明
+
+staging_protocol.rs 是测试源代码，不需要双击打开。它由 Cargo 自动运行，验证：
+- 没有 ready 标记的 JSON 不会被消费；
+- 没有图片的卡片可以入库；
+- 错误 JSON 会进入 failed 目录；
+- 旧 SQLite 布尔字段可以兼容读取。
+
+四、人工验收
+
+在 Chrome 扩展中保存：
+- 一张有图片的提示词；
+- 一条没有图片的纯提示词；
+- 一条识别错误的提示词并取消确认。
+
+确认桌面端能分别看到有图卡片、无图卡片，并且识别取消后不会直接保存。

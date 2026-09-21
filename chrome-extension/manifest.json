@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "提示词收藏夹 · 采集器",
+  "version": "0.2.2",
+  "description": "右键一键保存 AI 绘画提示词与图片到「提示词收藏夹」（Prompt Vault）。支持扫描当前页面图片点选保存，内置浮动菜单可穿透哩布哩布 / Lovart 等站点的右键屏蔽，自动识别图片描述/提示词。来源可在 matchers.js 中扩展。",
+  "permissions": ["contextMenus", "downloads", "activeTab", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["matchers.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "提示词收藏夹",
+    "default_popup": "popup.html"
+  }
+}

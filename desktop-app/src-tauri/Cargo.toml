@@ -1,0 +1,28 @@
+[package]
+name = "prompt-vault"
+version = "1.1.0"
+description = "提示词收藏夹 - AI 绘画提示词收集器"
+edition = "2021"
+
+[lib]
+name = "prompt_vault_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+fs2 = "0.4"
+tokio = { version = "1", features = ["time"] }
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+tauri-plugin-updater = "2.12.0"
+
+[profile.release]
+strip = true
