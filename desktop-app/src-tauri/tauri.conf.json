@@ -21,22 +21,32 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": [
+          "$APPDATA/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico", "icons/icon.png"]
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2OTA0OTIyN0FBQjk4MkEKUldRcW1LdDZJa21RbHVlWTk5WjRCQ3REYW9WS3RuTkQvMmdXdDZzbmRxdkUvVWYvallWTTMwSHUK",
-      "endpoints": ["https://github.com/zhaozhinan0707/prompt-vault/releases/latest/download/latest.json"],
-      "windows": { "installMode": "passive" }
+      "endpoints": [
+        "https://github.com/zhaozhinan0707/prompt-vault/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
-
