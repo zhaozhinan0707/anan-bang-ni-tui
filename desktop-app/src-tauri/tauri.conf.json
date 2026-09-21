@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "提示词收藏夹",
-  "version": "1.1.0",
+  "productName": "阿男帮你推",
+  "version": "1.2.0",
   "identifier": "com.promptvault.app",
   "build": {
     "frontendDist": "../dist"
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "提示词收藏夹 · Prompt Vault",
+        "title": "阿男帮你推",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -42,7 +42,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2OTA0OTIyN0FBQjk4MkEKUldRcW1LdDZJa21RbHVlWTk5WjRCQ3REYW9WS3RuTkQvMmdXdDZzbmRxdkUvVWYvallWTTMwSHUK",
       "endpoints": [
-        "https://github.com/zhaozhinan0707/prompt-vault/releases/latest/download/latest.json"
+        "https://github.com/zhaozhinan0707/anan-bang-ni-tui/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

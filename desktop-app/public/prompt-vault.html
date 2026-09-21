@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>提示词收藏夹 · 桌面应用 UI 原型</title>
+<title>阿男帮你推 · 桌面应用 UI 原型</title>
 <style>
   :root{
     --bg:#f2f3f5; --panel:#ffffff; --line:#e4e6eb; --line-2:#d0d3da;
@@ -214,7 +214,7 @@
   ::-webkit-scrollbar{width:8px;height:8px}
   ::-webkit-scrollbar-thumb{background:#d0d3da;border-radius:4px}
   ::-webkit-scrollbar-thumb:hover{background:#b4b9c0}
-  /* Prompt Vault 素材管理器视觉层 */
+  /* 阿男帮你推 素材管理器视觉层 */
   .titlebar{height:40px;padding:6px 14px;background:linear-gradient(90deg,#fff,#f7faff)}
   .tb-title{font-size:13px}
   .sidebar{width:220px;padding:12px 10px}
@@ -265,7 +265,7 @@
 <div class="app">
   <!-- 桌面窗口标题栏 -->
   <div class="titlebar">
-    <div class="tb-title"><b>提示词收藏夹</b> · Prompt Vault</div>
+    <div class="tb-title"><b>阿男帮你推</b> · 阿男帮你推</div>
     <div class="tb-spacer"></div>
     <div id="syncBadge" class="sync-badge" role="button" tabindex="0" onclick="syncFromBadge()" title="点击同步"><span class="dot"></span><span id="syncText">共享盘未配置</span></div>
   </div>
@@ -312,7 +312,7 @@
         <div class="empty" id="empty" style="display:none">
           <div class="big">◫</div>
           <p>还没有符合条件的卡片</p>
-          <small>在 Chrome 中右键图片，选择「保存到提示词收藏夹」即可采集</small>
+          <small>在 Chrome 中右键图片，选择「保存到阿男帮你推」即可采集</small>
         </div>
       </div>
     </section>
@@ -416,7 +416,7 @@
 <!-- 保存弹窗（模拟 Chrome 扩展采集确认） -->
 <div class="mask" id="saveMask">
   <div class="modal small save-modal">
-    <div class="s-head"><b>保存到提示词收藏夹</b><button class="d-close" onclick="closeSave()">×</button></div>
+    <div class="s-head"><b>保存到阿男帮你推</b><button class="d-close" onclick="closeSave()">×</button></div>
     <div class="s-body">
       <div class="s-imgrow">
         <div class="s-thumb" id="saveThumb"></div>

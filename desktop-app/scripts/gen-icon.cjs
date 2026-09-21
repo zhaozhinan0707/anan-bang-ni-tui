@@ -1,4 +1,4 @@
-// 生成 Prompt Vault 应用图标（纯 Node，无依赖）
+// 生成 阿男帮你推 应用图标（纯 Node，无依赖）
 // 输出：icons/icon.png（256）、icons/128x128.png、icons/32x32.png、icons/icon.ico
 const zlib = require('zlib');
 const fs = require('fs');

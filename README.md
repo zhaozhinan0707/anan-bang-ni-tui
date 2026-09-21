@@ -1,4 +1,4 @@
-# 提示词收藏夹 · Prompt Vault（M2 开发中 · 同步引擎 V1.1 已实现）
+# 阿男帮你推
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
@@ -45,7 +45,7 @@ prompt-vault/
 1. 打开 Chrome → `chrome://extensions/`
 2. 右上角开启「开发者模式」
 3. 点「加载已解压的扩展程序」，选择 `chrome-extension/` 目录
-4. 打开任意 AI 绘画网站（Lovart / 哩布哩布），在图片上**右键 → 「保存到提示词收藏夹」**
+4. 打开任意 AI 绘画网站（Lovart / 哩布哩布），在图片上**右键 → 「保存到阿男帮你推」**
 
 保存结果写入 **下载目录 `/PromptVault-staging/`**：
 - `{uuid}.png`：原图

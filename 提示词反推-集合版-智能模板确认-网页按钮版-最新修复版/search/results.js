@@ -9,7 +9,7 @@ async function poll() {
   if (task.status === 'preparing') { title.textContent = '正在获取图片…'; return setTimeout(poll, 300); }
   if (task.status === 'searching') { title.textContent = '正在搜索 Pinterest…'; renderCapture(task.capture); return setTimeout(poll, 500); }
   if (task.status === 'failed') return renderError('SEARCH_FAILED', task.error || '搜索失败');
-  title.textContent = '找到相似灵感'; summary.textContent = `共 ${task.results.length} 个结果 · 左键打开 Pinterest Pin；右键选择“发送图片到 Prompt Vault 画布”`; renderResults(task.results); cursor = task.cursor; next.hidden = !cursor;
+  title.textContent = '找到相似灵感'; summary.textContent = `共 ${task.results.length} 个结果 · 左键打开 Pinterest Pin；右键选择“发送图片到阿男帮你推画布”`; renderResults(task.results); cursor = task.cursor; next.hidden = !cursor;
 }
 function renderCapture(capture) { if (capture) details.textContent = `图片：${capture.width}×${capture.height} · ${capture.mimeType} · ${capture.captureMethod}`; }
 function renderError(code = 'UNEXPECTED', message = '未知错误', capture, errorDetails = {}) {

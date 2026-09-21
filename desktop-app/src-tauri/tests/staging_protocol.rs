@@ -1,4 +1,4 @@
-//! Prompt Vault 集成测试：验证跨进程 staging 协议的关键不变量。
+//! 阿男帮你推 集成测试：验证跨进程 staging 协议的关键不变量。
 //! 运行：cargo test --manifest-path desktop-app/src-tauri/Cargo.toml
 
 use std::fs;

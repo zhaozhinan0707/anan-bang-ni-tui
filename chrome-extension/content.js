@@ -4,7 +4,7 @@
  * 背景：Lovart / 哩布哩布等站点在图片上 preventDefault() 屏蔽了浏览器原生右键
  * 菜单，导致扩展注册的 chrome.contextMenus 项无法显示。因此这里在 document
  * 捕获阶段（先于页面一切 handler）接管 contextmenu 事件，注入自定义浮动菜单
- * （closed Shadow DOM 隔离样式），保证任何屏蔽下都能弹出「保存到提示词收藏夹」。
+ * （closed Shadow DOM 隔离样式），保证任何屏蔽下都能弹出「保存到阿男帮你推」。
  */
 (() => {
   if (window.__PROMPT_VAULT_CONTENT__) return; // 防重复注入
@@ -266,7 +266,7 @@
         @keyframes pvspin{to{transform:rotate(360deg)}}
       </style>
       <div class="pv-menu" id="menu" style="left:${Math.min(x, innerWidth - 250)}px;top:${Math.min(y, innerHeight - 150)}px">
-        <div class="pv-item" data-act="save"><span class="ic"></span>保存到提示词收藏夹</div>
+        <div class="pv-item" data-act="save"><span class="ic"></span>保存到阿男帮你推</div>
         <div class="pv-item sub" data-act="manual">✎ 手动粘贴提示词…</div>
         <div class="pv-hint" id="hint">正在读取提示词…</div>
       </div>`;

@@ -1,8 +1,8 @@
 {
   "name": "prompt-vault-desktop",
   "private": true,
-  "version": "1.1.0",
-  "description": "提示词收藏夹 · Tauri 2 桌面应用（纯静态前端，无构建步骤）",
+  "version": "1.2.0",
+  "description": "阿男帮你推 · Tauri 2 桌面应用（纯静态前端，无构建步骤）",
   "scripts": {
     "dev": "vite",
     "build": "vite build && tauri build",

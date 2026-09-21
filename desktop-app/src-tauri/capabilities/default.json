@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "提示词收藏夹默认权限",
+  "description": "阿男帮你推默认权限",
   "windows": ["main"],
   "permissions": ["core:default", "updater:default"]
 }

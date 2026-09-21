@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
-title Prompt Vault 验收测试
-echo Prompt Vault Rust 验收测试
+title 阿男帮你推 验收测试
+echo 阿男帮你推 Rust 验收测试
 echo.
 where cargo >nul 2>nul
 if errorlevel 1 set "PATH=C:\Users\XC\.cargo\bin;%PATH%"

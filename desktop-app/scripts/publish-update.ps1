@@ -41,11 +41,11 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $credential.GetNetworkCredential().Pas
 try { Push-Location $appRoot; pnpm.cmd run build } finally { Pop-Location; Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue; Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue }
 
 $bundle = Join-Path $appRoot 'src-tauri\target\release\bundle\nsis'
-$nativeInstaller = Get-ChildItem -LiteralPath $bundle -Filter '*setup.exe' | Where-Object Name -NotLike 'PromptVault_*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$nativeInstaller = Get-ChildItem -LiteralPath $bundle -Filter '*setup.exe' | Where-Object Name -NotLike 'AnanBangNiTui_*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (!$nativeInstaller) { throw '未找到 Tauri Windows 更新安装包。' }
 $nativeSignature = "$($nativeInstaller.FullName).sig"
 if (!(Test-Path -LiteralPath $nativeSignature)) { throw '未找到更新包签名。' }
-$archivePath = Join-Path $bundle "PromptVault_${Version}_x64-setup.exe"
+$archivePath = Join-Path $bundle "AnanBangNiTui_${Version}_x64-setup.exe"
 $signaturePath = "$archivePath.sig"
 Copy-Item -LiteralPath $nativeInstaller.FullName -Destination $archivePath -Force
 Copy-Item -LiteralPath $nativeSignature -Destination $signaturePath -Force
@@ -68,8 +68,8 @@ $assets = @($archive.FullName, $signaturePath, $manifestPath)
 & gh release view "v$Version" --repo $repository *> $null
 if ($LASTEXITCODE -eq 0) {
   & gh release upload "v$Version" @assets --repo $repository --clobber
-  & gh release edit "v$Version" --repo $repository --title "Prompt Vault $Version" --notes $Notes --latest
+  & gh release edit "v$Version" --repo $repository --title "阿男帮你推 $Version" --notes $Notes --latest
 } else {
-  & gh release create "v$Version" @assets --repo $repository --title "Prompt Vault $Version" --notes $Notes --latest
+  & gh release create "v$Version" @assets --repo $repository --title "阿男帮你推 $Version" --notes $Notes --latest
 }
 Write-Host "发布完成：https://github.com/$repository/releases/tag/v$Version"

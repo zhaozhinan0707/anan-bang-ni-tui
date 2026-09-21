@@ -12,10 +12,10 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "save-prompt",
-      title: "保存到提示词收藏夹",
+      title: "保存到阿男帮你推",
       contexts: ["image"]
     });
-    chrome.contextMenus.create({ id: "send-to-canvas", title: "发送图片到 Prompt Vault 画布", contexts: ["image"] });
+    chrome.contextMenus.create({ id: "send-to-canvas", title: "发送图片到阿男帮你推画布", contexts: ["image"] });
   });
 });
 

@@ -203,11 +203,11 @@ chrome.runtime.onInstalled.addListener((details) => {
     });
     chrome.contextMenus.create({
       id: 'save-prompt',
-      title: '保存到提示词收藏夹',
+      title: '保存到阿男帮你推',
       contexts: ['image'],
     });
     chrome.contextMenus.create({ id: 'visual-search', title: '以图搜图（Pinterest Lens）', contexts: ['image'] });
-    chrome.contextMenus.create({ id: 'send-search-result-to-canvas', title: '发送图片到 Prompt Vault 画布', contexts: ['image'] });
+    chrome.contextMenus.create({ id: 'send-search-result-to-canvas', title: '发送图片到阿男帮你推画布', contexts: ['image'] });
   });
 });
 
@@ -427,7 +427,7 @@ async function sendReverseResultToCanvas(message) {
   try {
     response = await fetch('http://127.0.0.1:47777/api/canvas-import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   } catch (_) {
-    throw new Error('桌面程序未启动或版本过旧，请先安装并打开最新版提示词收藏夹');
+    throw new Error('桌面程序未启动或版本过旧，请先安装并打开最新版阿男帮你推');
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) throw new Error(result.error || `桌面端拒绝接收（${response.status}）`);

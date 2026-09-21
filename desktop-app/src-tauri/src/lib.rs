@@ -1,4 +1,4 @@
-//! 提示词收藏夹 · Tauri 桌面应用入口与命令层
+//! 阿男帮你推 · Tauri 桌面应用入口与命令层
 //! 前端（../src/index.html）通过 window.__TAURI__.core.invoke 调用下列命令。
 
 mod ingest;
@@ -201,7 +201,7 @@ fn set_image_download_directory(download_directory: String, state: tauri::State<
 fn select_download_directory() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '选择 Prompt Vault 原图下载目录'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Write-Output $d.SelectedPath }";
+        let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '选择 阿男帮你推 原图下载目录'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Write-Output $d.SelectedPath }";
         let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-STA", "-Command", script]).output().map_err(|error| format!("无法打开目录选择器：{error}"))?;
         if !output.status.success() { return Err("目录选择器未能启动".into()); }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
