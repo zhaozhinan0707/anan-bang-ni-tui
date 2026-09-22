@@ -56,6 +56,12 @@
   const TEMPLATE_MAP_KEY = 'pr_prompt_template_map';
   const CUSTOM_TEMPLATES_KEY = 'pr_custom_templates';
   const HIDDEN_TEMPLATES_KEY = 'pr_hidden_templates';
+  const MIMO_MODEL_MIGRATIONS = {
+    'mimo-v2-flash': 'mimo-v2.6-flash',
+    'mimo-v2.5': 'mimo-v2.6-flash',
+    'mimo-v2.5-pro': 'mimo-v2.6-pro',
+  };
+  const migrateMimoModel = (model) => MIMO_MODEL_MIGRATIONS[model] || model;
   let clearConfirmTimer = null;
   let currentDocument = null;
   let lockedSections = new Set();
@@ -124,7 +130,9 @@
 
       dom.apiKey.value = localItems.apiKey || items.apiKey || '';
       dom.apiBase.value = items.apiBase || '';
-      dom.modelSelect.value = items.model || 'gpt-4o';
+      const model = migrateMimoModel(items.model || 'gpt-4o');
+      dom.modelSelect.value = model;
+      if (model !== items.model) chrome.storage.sync.set({ model });
       dom.customModel.value = items.customModel || '';
       const templateId = localItems.promptTemplateId || items.promptTemplateId;
       renderTemplateOptions(localItems[CUSTOM_TEMPLATES_KEY] || [], templateId, localItems[HIDDEN_TEMPLATES_KEY] || []);
@@ -133,8 +141,8 @@
       setPromptTemplateSelection(templateId, dom.promptTemplate.value);
 
       // 显示/隐藏自定义模型字段
-      toggleCustomModel(items.model);
-      const settings = { ...items, apiKey: dom.apiKey.value, promptTemplateId: templateId, promptTemplate: dom.promptTemplate.value };
+      toggleCustomModel(model);
+      const settings = { ...items, model, apiKey: dom.apiKey.value, promptTemplateId: templateId, promptTemplate: dom.promptTemplate.value };
       checkConfigStatus(settings);
       // 仅同步给正在运行的桌面端本机接口；不会上传至第三方。
       syncConfigToDesktop(settings);
@@ -295,7 +303,7 @@
     chrome.storage.local.get([API_PROFILES_KEY], (items) => {
       const profile = (Array.isArray(items[API_PROFILES_KEY]) ? items[API_PROFILES_KEY] : [])[index];
       if (!profile) return showToast('这个配置槽位还没有保存');
-      dom.apiKey.value = profile.apiKey || ''; dom.apiBase.value = profile.apiBase || ''; dom.modelSelect.value = profile.model || 'custom'; dom.customModel.value = profile.customModel || '';
+      dom.apiKey.value = profile.apiKey || ''; dom.apiBase.value = profile.apiBase || ''; dom.modelSelect.value = migrateMimoModel(profile.model || 'custom'); dom.customModel.value = profile.customModel || '';
       toggleCustomModel(dom.modelSelect.value); saveSettings(); showToast(`已切换到常用配置 ${index + 1}`);
     });
   }

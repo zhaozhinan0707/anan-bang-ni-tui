@@ -151,6 +151,9 @@ const MODEL_PROVIDERS = {
   "glm-4":  { provider: "glm", vision: false },
   "glm-4v": { provider: "glm", vision: true },
   // 小米 MiMo：OpenAI 兼容接口，支持多模态消息
+  "mimo-v2.6-pro": { provider: "mimo", vision: true },
+  "mimo-v2.6-flash": { provider: "mimo", vision: true },
+  "mimo-v2.6-pro-ultraspeed": { provider: "mimo", vision: true },
   "mimo-v2-flash": { provider: "mimo", vision: true },
   "mimo-v2.5-pro": { provider: "mimo", vision: true },
   "mimo-v2.5": { provider: "mimo", vision: true },
@@ -189,11 +192,21 @@ const ENHANCE_TASK_KEY = 'pr_enhance_task';
 const ACTIVE_ENHANCE_CONTROLLERS = new Set();
 const CANCELLED_ENHANCE_TASKS = new Set();
 const EDIT_INSTRUCTION_CACHE = new Map();
+const MIMO_MODEL_MIGRATIONS = {
+  'mimo-v2-flash': 'mimo-v2.6-flash',
+  'mimo-v2.5': 'mimo-v2.6-flash',
+  'mimo-v2.5-pro': 'mimo-v2.6-pro',
+};
 
 // ==================== 右键菜单 ====================
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     chrome.storage.sync.set(DEFAULT_SETTINGS);
+  } else if (details.reason === 'update') {
+    chrome.storage.sync.get(['model'], ({ model }) => {
+      const migratedModel = MIMO_MODEL_MIGRATIONS[model];
+      if (migratedModel) chrome.storage.sync.set({ model: migratedModel });
+    });
   }
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({

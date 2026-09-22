@@ -229,6 +229,7 @@ fn default_base(model: &str) -> &'static str {
         "qwen-max" | "qwen-plus" | "qwen3-vl-flash" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "moonshot-v1-32k" => "https://api.moonshot.cn/v1",
         "glm-4" | "glm-4v" => "https://open.bigmodel.cn/api/paas/v4",
+        "mimo-v2.6-pro" | "mimo-v2.6-flash" | "mimo-v2.6-pro-ultraspeed" |
         "mimo-v2-flash" | "mimo-v2.5-pro" | "mimo-v2.5" => "https://token-plan-cn.xiaomimimo.com/v1",
         _ => "",
     }
@@ -250,8 +251,26 @@ fn supports_vision(model: &str) -> bool {
         "gpt-4o" | "gpt-4o-mini" | "gpt-4-turbo" |
         "claude-3-5-sonnet" | "claude-3-opus" |
         "gemini-1.5-pro" | "gemini-1.5-flash" | "gemini-2.5-flash" | "gemini-2.5-flash-lite" |
-        "doubao-pro-32k" | "doubao-pro-128k" | "qwen-max" | "qwen-plus" | "qwen3-vl-flash" | "wenxin-4" | "glm-4v" | "mimo-v2-flash" | "mimo-v2.5-pro" | "mimo-v2.5" | "custom"
+        "doubao-pro-32k" | "doubao-pro-128k" | "qwen-max" | "qwen-plus" | "qwen3-vl-flash" | "wenxin-4" | "glm-4v" |
+        "mimo-v2.6-pro" | "mimo-v2.6-flash" | "mimo-v2.6-pro-ultraspeed" |
+        "mimo-v2-flash" | "mimo-v2.5-pro" | "mimo-v2.5" | "custom"
     )
+}
+
+fn openai_compatible_payload(model: &str, messages: serde_json::Value, max_tokens: u64, temperature: f64) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": false
+    });
+    if model.starts_with("mimo-") {
+        payload["thinking"] = serde_json::json!({"type": "disabled"});
+        payload["max_completion_tokens"] = serde_json::json!(max_tokens);
+        if let Some(object) = payload.as_object_mut() { object.remove("max_tokens"); }
+    }
+    payload
 }
 
 fn strip_data_url(data_url: &str) -> Result<(String, String), String> {
@@ -317,7 +336,9 @@ pub async fn reverse(state: &AiState, image_data_url: String, template_id: Optio
     } else if kind == "google" {
         client.post(format!("{base}/models/{model}:generateContent?key={}", config.api_key)).json(&serde_json::json!({"contents":[{"parts":[{"text":format!("{system}\n\n请反推这张参考图。")},{"inline_data":{"mime_type":mime,"data":b64}}]}],"generationConfig":{"maxOutputTokens":8192,"temperature":0.45}})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
     } else {
-        client.post(format!("{base}/chat/completions")).bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }).json(&serde_json::json!({"model":model,"messages":[{"role":"system","content":system},{"role":"user","content":[{"type":"text","text":"请反推这张参考图。"},{"type":"image_url","image_url":{"url":format!("data:{mime};base64,{b64}"),"detail":"high"}}]}],"max_tokens":2048,"temperature":0.45,"stream":false})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
+        let messages = serde_json::json!([{"role":"system","content":system},{"role":"user","content":[{"type":"text","text":"请反推这张参考图。"},{"type":"image_url","image_url":{"url":format!("data:{mime};base64,{b64}"),"detail":"high"}}]}]);
+        let payload = openai_compatible_payload(&model, messages, 2048, 0.45);
+        client.post(format!("{base}/chat/completions")).bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }).json(&payload).send().await.map_err(|e| format!("模型请求失败：{e}"))?
     };
     let code = response.status();
     let body: serde_json::Value = response.json().await.map_err(|_| "模型返回了无法识别的内容".to_string())?;
@@ -350,7 +371,9 @@ pub async fn assistant(state: &AiState, message: String, context_prompt: Option<
     let context = context_prompt.filter(|x| !x.trim().is_empty()).map(|x| format!("\n\n当前提示词上下文：\n{x}")).unwrap_or_default();
     let mut content = vec![serde_json::json!({"type":"text","text":format!("{}{}", message.trim(), context)})];
     if let Some(data) = image_data_url.filter(|x| x.starts_with("data:image/")) { content.push(serde_json::json!({"type":"image_url","image_url":{"url":data,"detail":"high"}})); }
-    let response = reqwest::Client::builder().timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?.post(format!("{base}/chat/completions")).bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }).json(&serde_json::json!({"model":model,"messages":[{"role":"system","content":system},{"role":"user","content":content}],"max_tokens":2048,"temperature":0.4,"stream":false})).send().await.map_err(|e| format!("提示词助手请求失败：{e}"))?;
+    let messages = serde_json::json!([{"role":"system","content":system},{"role":"user","content":content}]);
+    let payload = openai_compatible_payload(&model, messages, 2048, 0.4);
+    let response = reqwest::Client::builder().timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?.post(format!("{base}/chat/completions")).bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }).json(&payload).send().await.map_err(|e| format!("提示词助手请求失败：{e}"))?;
     let code = response.status(); let body: serde_json::Value = response.json().await.map_err(|_| "模型返回内容无法识别".to_string())?;
     if !code.is_success() { return Err(format!("提示词助手请求失败（{code}）：{}", body.pointer("/error/message").and_then(|x| x.as_str()).unwrap_or("请检查插件模型配置"))); }
     let text = openai_text(&body).trim().to_string(); if text.is_empty() { return Err("模型没有返回可用内容".into()); }

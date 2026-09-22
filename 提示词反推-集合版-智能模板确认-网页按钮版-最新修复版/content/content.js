@@ -51,7 +51,7 @@
     'doubao-pro-32k': '豆包 Pro 32K', 'doubao-pro-128k': '豆包 Pro 128K', 'doubao-lite-32k': '豆包 Lite 32K',
     'deepseek-chat': 'DeepSeek-V3', 'deepseek-reasoner': 'DeepSeek-R1',
     'qwen-max': '通义千问 Max', 'qwen-plus': '通义千问 Plus', 'wenxin-4': '文心一言 4.0',
-    'moonshot-v1-32k': 'Kimi', 'glm-4': 'GLM-4', 'glm-4v': 'GLM-4V 视觉', 'mimo-v2-flash': '小米 MiMo-V2-Flash 视觉', 'mimo-v2.5-pro': '小米 MiMo-V2.5-Pro 视觉', 'mimo-v2.5': '小米 MiMo-V2.5 视觉', 'custom': '自定义模型',
+    'moonshot-v1-32k': 'Kimi', 'glm-4': 'GLM-4', 'glm-4v': 'GLM-4V 视觉', 'mimo-v2.6-pro': '小米 MiMo-V2.6-Pro 视觉', 'mimo-v2.6-flash': '小米 MiMo-V2.6-Flash 视觉', 'mimo-v2.6-pro-ultraspeed': '小米 MiMo-V2.6-Pro-UltraSpeed 视觉', 'mimo-v2-flash': '小米 MiMo-V2-Flash 视觉（旧版）', 'mimo-v2.5-pro': '小米 MiMo-V2.5-Pro 视觉（旧版）', 'mimo-v2.5': '小米 MiMo-V2.5 视觉（旧版）', 'custom': '自定义模型',
   };
 
   // ============ 状态管理 ============

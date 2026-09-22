@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "提示词反推 - AI 图片提示词生成器",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "在任意网页图片上悬浮按钮，一键调用 AI 反推中文提示词，支持 GPT/Claude/豆包/DeepSeek 等 20+ 模型和中转站。",
   "permissions": [
     "storage",

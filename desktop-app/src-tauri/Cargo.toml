@@ -1,6 +1,6 @@
 [package]
 name = "prompt-vault"
-version = "1.2.0"
+version = "1.2.1"
 description = "阿男帮你推 - AI 绘画提示词收集器"
 edition = "2021"
 
