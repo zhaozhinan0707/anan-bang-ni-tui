@@ -308,6 +308,29 @@ fn reverse_system_prompt(template: &str) -> String {
     )
 }
 
+fn modify_system_prompt(template: &str) -> String {
+    let style = if template.trim().is_empty() { "保持原提示词的详细程度和可执行性，使用自然连贯的中文描述。" } else { template.trim() };
+    format!(r#"你是专业的 AI 生图提示词编辑器。你的唯一任务是：在不改变原提示词中未被用户要求修改的内容前提下，按用户修改要求和参考图事实，输出一版可直接用于生图的完整中文提示词。
+
+## 修改规则
+1. 原版提示词是主文本；只执行用户明确提出的修改，不自行增加新的创意，不重写成另一套方案。
+2. 补充参考图只用于确认被替换对象的外观、结构、颜色和材质。参考图1、参考图2等编号必须严格对应用户的修改要求。
+3. 如果用户要求替换产品或部件，保留原画面的构图、场景、人物、动作、光线和镜头，只替换指定对象；不要把参考图背景带入结果。
+4. 不确定的细节以参考图为准，不要臆测不可见内容。
+
+## 输出契约（必须遵守）
+- 只输出修改后的完整中文生图提示词。
+- 不要输出分析、推理、解释、修改说明、工作计划、问候语或结论。
+- 不要复述本段规则、模板、原版提示词或用户修改要求。
+- 不要出现“回应用户指令”“用户说”“所以我需要”“以下是”“修改后的提示词”等元话术。
+- 不要标题、编号、项目符号、Markdown、引号或 JSON。
+
+## 允许参考的风格约束（只内部执行，不得复述）
+{}
+
+输出前只在内部检查一次：是否完整保留了原画面，是否只做了用户要求的修改，参考图编号是否对应。检查完成后直接输出最终提示词。"#, style)
+}
+
 pub async fn reverse(state: &AiState, image_data_url: String, template_id: Option<String>, original_prompt: Option<String>, instruction: Option<String>) -> Result<ReversePromptResult, String> {
     let config = state.config.lock().map(|x| x.clone()).unwrap_or_default();
     if config.model.is_empty() { return Err("尚未同步模型配置。请打开 Chrome 的提示词反推插件设置一次。".into()); }
@@ -323,21 +346,27 @@ pub async fn reverse(state: &AiState, image_data_url: String, template_id: Optio
     let active_template = selected_template.map(|item| item.content.as_str()).unwrap_or(&config.prompt_template);
     let used_template_id = selected_template.map(|item| item.id.clone()).unwrap_or_else(|| config.prompt_template_id.clone());
     let used_template_label = selected_template.map(|item| item.label.clone()).unwrap_or_else(|| if config.prompt_template_id.is_empty() { "默认视觉反推模板".into() } else { format!("模板 {}", config.prompt_template_id) });
-    let mut system = reverse_system_prompt(active_template);
-    if let Some(note) = instruction.filter(|value| !value.trim().is_empty()) {
-        let original = original_prompt.unwrap_or_default();
-        system.push_str(&format!("\n\n这是一次提示词修改。原版提示词：{original}\n用户修改要求：{note}\n请以参考图为事实依据，输出修改后的完整中文提示词；不要解释修改过程。"));
-    }
+    let modification = match (original_prompt.as_deref().filter(|value| !value.trim().is_empty()), instruction.as_deref().filter(|value| !value.trim().is_empty())) {
+        (Some(original), Some(note)) => Some((original, note)),
+        _ => None,
+    };
+    let system = if modification.is_some() { modify_system_prompt(active_template) } else { reverse_system_prompt(active_template) };
+    let user_text = if let Some((original, note)) = modification {
+        format!("这是一次提示词修改任务。\n\n【原版提示词】\n{original}\n\n【用户修改要求】\n{note}\n\n请结合参考图事实，直接输出修改后的完整中文生图提示词。")
+    } else {
+        "请反推这张参考图，直接输出可用于生图的完整中文提示词。".to_string()
+    };
+    let temperature = if modification.is_some() { 0.2 } else { 0.45 };
     let client = reqwest::Client::builder().timeout(Duration::from_secs(90)).build().map_err(|e| e.to_string())?;
     let kind = provider(&config.model);
     let response = if kind == "anthropic" {
         let actual = match model.as_str() { "claude-3-5-sonnet" => "claude-3-5-sonnet-20241022", "claude-3-opus" => "claude-3-opus-20240229", _ => &model };
-        client.post(format!("{base}/messages")).header("x-api-key", &config.api_key).header("anthropic-version", "2023-06-01").json(&serde_json::json!({"model":actual,"max_tokens":2048,"system":system,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":mime,"data":b64}},{"type":"text","text":"请反推这张参考图。"}]}]})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
+        client.post(format!("{base}/messages")).header("x-api-key", &config.api_key).header("anthropic-version", "2023-06-01").json(&serde_json::json!({"model":actual,"max_tokens":2048,"system":system,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":mime,"data":b64}},{"type":"text","text":user_text}]}]})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
     } else if kind == "google" {
-        client.post(format!("{base}/models/{model}:generateContent?key={}", config.api_key)).json(&serde_json::json!({"contents":[{"parts":[{"text":format!("{system}\n\n请反推这张参考图。")},{"inline_data":{"mime_type":mime,"data":b64}}]}],"generationConfig":{"maxOutputTokens":8192,"temperature":0.45}})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
+        client.post(format!("{base}/models/{model}:generateContent?key={}", config.api_key)).json(&serde_json::json!({"contents":[{"parts":[{"text":format!("{system}\n\n{user_text}")},{"inline_data":{"mime_type":mime,"data":b64}}]}],"generationConfig":{"maxOutputTokens":8192,"temperature":0.35}})).send().await.map_err(|e| format!("模型请求失败：{e}"))?
     } else {
-        let messages = serde_json::json!([{"role":"system","content":system},{"role":"user","content":[{"type":"text","text":"请反推这张参考图。"},{"type":"image_url","image_url":{"url":format!("data:{mime};base64,{b64}"),"detail":"high"}}]}]);
-        let payload = openai_compatible_payload(&model, messages, 2048, 0.45);
+        let messages = serde_json::json!([{"role":"system","content":system},{"role":"user","content":[{"type":"text","text":user_text},{"type":"image_url","image_url":{"url":format!("data:{mime};base64,{b64}"),"detail":"high"}}]}]);
+        let payload = openai_compatible_payload(&model, messages, 2048, temperature);
         client.post(format!("{base}/chat/completions")).bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }).json(&payload).send().await.map_err(|e| format!("模型请求失败：{e}"))?
     };
     let code = response.status();

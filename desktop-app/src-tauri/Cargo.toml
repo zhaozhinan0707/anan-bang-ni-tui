@@ -1,6 +1,6 @@
 [package]
 name = "prompt-vault"
-version = "1.2.1"
+version = "1.3.2"
 description = "阿男帮你推 - AI 绘画提示词收集器"
 edition = "2021"
 
@@ -26,4 +26,3 @@ tauri-plugin-updater = "2.12.0"
 
 [profile.release]
 strip = true
-

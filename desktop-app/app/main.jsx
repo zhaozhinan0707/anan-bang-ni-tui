@@ -33,7 +33,80 @@ const normalizeScene = (scene = {}) => ({
   appState: { viewBackgroundColor: CANVAS_BACKGROUND },
 })
 const wrapCanvasText = (value, width = 32) => (value || '').match(new RegExp(`.{1,${width}}`, 'g'))?.join('\n') || ''
-const GENERATION_DEFAULTS = { generationAspect: '16:9', generationQuality: '2K', generationCount: 1, productConsistency: true }
+const GENERATION_DEFAULTS = {
+  generationAspect: '16:9',
+  generationQuality: '2K',
+  generationCount: 1,
+  productConsistency: true,
+  generationMultiAngleEnabled: false,
+  generationAngleMode: 'camera',
+  generationRotate: 0,
+  generationTilt: 0,
+  generationScale: 'medium',
+  generationBacksideReference: null,
+  generationActionLock: true,
+}
+const MULTI_ANGLE_DEFAULTS = {
+  generationMultiAngleEnabled: false,
+  generationAngleMode: 'camera',
+  generationRotate: 0,
+  generationTilt: 0,
+  generationScale: 'medium',
+  generationBacksideReference: null,
+  generationActionLock: true,
+}
+const GENERATION_ASPECTS = ['9:16', '2:3', '3:4', '4:5', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9']
+const angleScaleLabel = (value) => ({ close: '近景', medium: '中景', wide: '远景' }[value] || '中景')
+const signedAngle = (value) => {
+  const number = Number(value) || 0
+  return `${number > 0 ? '+' : ''}${number}°`
+}
+const describeCameraRotation = (value) => {
+  const number = clampNumber(value, -180, 180)
+  const absolute = Math.abs(number)
+  if (absolute < 15) return '保持原始水平视角，不改变主体左右朝向'
+  const side = number > 0 ? '右' : '左'
+  if (absolute >= 165) return `绕主体向${side}旋转约 ${absolute}°，目标为主体背面视角`
+  if (absolute >= 105) return `绕主体向${side}旋转约 ${absolute}°，目标为${side}后方三分之四视角`
+  if (absolute >= 60) return `绕主体向${side}旋转约 ${absolute}°，目标为${side}侧面视角`
+  return `绕主体向${side}旋转约 ${absolute}°，目标为${side}前方三分之四视角`
+}
+const describeCameraTilt = (value) => {
+  const number = clampNumber(value, -60, 60)
+  if (number >= 35) return `高机位俯视约 ${number}°，露出产品顶部和车架上表面`
+  if (number >= 15) return `略高机位俯视约 ${number}°`
+  if (number <= -35) return `低机位仰视约 ${Math.abs(number)}°，露出产品底部和轮胎接地关系`
+  if (number <= -15) return `略低机位仰视约 ${Math.abs(number)}°`
+  return '保持接近平视的垂直机位'
+}
+const describeCameraScale = (value) => {
+  if (value === 'close') return '极近景产品特写：摄像机明显靠近主体，产品主体占画面高度约 75%–90%，减少环境留白和远处背景；允许裁切环境，但不得裁掉产品的车把、前后轮、轮胎和关键结构。禁止输出与原图相同的中远景构图。'
+  if (value === 'wide') return '远景：摄像机后退，主体约占画面高度 35%–55%，保留更多环境空间和完整场景关系。'
+  return '中景：主体约占画面高度 55%–75%，同时保留适量环境和完整产品结构。'
+}
+const buildMultiAngleInstruction = (node = {}) => {
+  if (node.generationMultiAngleEnabled !== true) return ''
+  const mode = node.generationAngleMode === 'subject' ? '主体' : '摄像机'
+  const rotation = Number(node.generationRotate) || 0
+  const tilt = Number(node.generationTilt) || 0
+  const extreme = Math.abs(rotation) >= 120 || Math.abs(tilt) >= 45
+  const actionLock = node.generationActionLock !== false
+  const backsideReference = node.generationBacksideReference?.dataURL ? '【产品背面参考图已上传｜高优先级】本次请求附带的这张图片是当前产品的同一型号、另一面（背面）参考，不是新产品、不是场景参考，也不是要替换的产品。目标视角接近背面时，必须优先依据它还原背面的车架、轮组、灯具、接口、贴花、走线和结构关系；正面图与背面图共有的结构必须保持一致，若文字描述与背面图可见结构冲突，以背面图的可见结构为准。' : ''
+  const motion = mode === '主体'
+    ? '调整产品主体的朝向，背景可以保持大体构图和光线稳定，但产品、人物和地面的接触关系必须真实'
+    : '让虚拟摄像机围绕整个场景运动，人物、产品、地面和背景都按同一个摄像机位置重新投影，保持透视、接地和空间关系自然'
+  const sceneLock = mode === '摄像机'
+    ? '【整场景联动｜高优先级】摄像机模式不是只把产品翻面，也不是对产品局部做左右镜像；它表示摄像机移动到目标位置后重新拍摄同一个物理场景。人物、产品、地面、建筑和背景文字必须一起随新机位改变画面位置、可见侧面、透视和遮挡关系。不要把人物和背景原封不动地留在原正面构图里，也不要把背景当成贴图固定在原像素位置；原图看不到的背景区域按场景逻辑自然补全。'
+    : '【主体模式】只改变产品主体朝向，人物和背景尽量保持原构图；仍需重新计算产品与人物、地面和环境之间的遮挡与接触，不得把产品穿过人物或地面。'
+  const poseLock = actionLock
+    ? '【人物动作锁定｜高优先级】如果原场景包含人物或骑行者，必须保持原图的人物身份、人数、当前姿势、头部朝向、身体重心、四肢骨架、手脚位置、抓握关系、骑行动作、服装和人与产品的相对关系。动作锁定表示保持人物在真实空间中的姿态，只允许因摄像机移动而改变画面中的投影、可见侧面和遮挡；禁止把人物改成另一种动作、重新站立、抬手、迈步、骑行状态，禁止增加或减少人物和肢体，禁止改变人与产品的接触点。'
+    : mode === '摄像机'
+      ? '如果原场景包含人物或骑行者，保持原图的人物身份、人数、动作意图、身体重心、四肢骨架、手脚位置、抓握关系、骑行动作和服装；这些关系在真实空间中保持不变，但必须从目标摄像机方向重新呈现，允许看到人物的侧面或背面，禁止把原图正面人物直接贴回新背景。'
+      : '如果原场景包含人物或骑行者，必须保持原图的人物身份、人数、头部朝向、身体重心、四肢骨架、手脚位置、抓握关系、骑行动作、服装和人与产品的相对关系；不得因为换视角而改成另一种姿势、增加或减少肢体、改变人物与产品的接触点。'
+  const depthLock = '【空间与遮挡锁定】先判断人物、产品、地面和背景的前后深度，再生成画面；手必须真实握住车把，脚必须真实踩地或与踏板接触，车轮必须落在地面上。禁止手脚、车把、车架、轮胎穿过身体、衣服、地面或彼此重叠成不可能的结构；遮挡边界要自然连续，不能出现肢体断裂、双重车把、悬空车轮或穿模。'
+  const extremeNote = extreme ? '这是极端视角变化。即使目标方向需要补全原图看不到的背面，也要优先保持整个人物动作、场景空间和产品结构，允许只对不可见区域做最小必要补全；不得为了补全背面而只重画产品、固定原背景，或重画整个人物。' : ''
+  return `【多角度视角控制｜最高优先级】\n这是同一场景的视角变体生成，不是只修改产品，也不是重新设计产品。控制模式：${mode}。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；目标旋转数值：${signedAngle(rotation)}；目标倾斜数值：${signedAngle(tilt)}；取景距离：${angleScaleLabel(node.generationScale)}。${describeCameraScale(node.generationScale)}${motion}。必须严格执行上述数值对应的目标机位，让人物和产品的可见侧面、背景透视、主体占画面比例、地面接触和遮挡关系发生与目标视角一致的明显变化；不要只改变颜色、产品姿势、背景或轻微裁切。尤其是近景和远景模式，必须先改变镜头距离和主体占画面比例，再处理人物、产品和背景的透视；不要把景别理解成只放大或缩小画布。${sceneLock}${poseLock}${depthLock}${extremeNote}${backsideReference}严格保持产品型号、车架结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、贴花、Logo、颜色、材质和各部件比例完全一致；目标视角看不到的区域按产品参考图和产品结构合理补全，禁止变成其他型号、通用款或新增删减部件。`
+}
 const formatGenerationDuration = (milliseconds = 0) => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000))
   return seconds >= 60 ? `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, '0')}秒` : `${seconds}秒`
@@ -41,11 +114,11 @@ const formatGenerationDuration = (milliseconds = 0) => {
 const formatPhaseDuration = (milliseconds = 0) => milliseconds >= 60_000 ? formatGenerationDuration(milliseconds) : `${(Math.max(0, milliseconds) / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}秒`
 const PRODUCT_CONSISTENCY_INSTRUCTION = '以输入的产品参考图为唯一外观依据，严格保持产品身份与外观一致：不得改变车架几何结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、折叠机构、接口、配色、材质、贴花、Logo及各部件比例。根据后续完整提示词生成新场景，不要重新设计产品，不要添加或删除部件。'
 const GENERATION_SIZES = {
-  '1K': { '1:1': '1024x1024', '4:3': '1024x768', '3:4': '768x1024', '16:9': '1024x576', '9:16': '576x1024' },
-  '2K': { '1:1': '2048x2048', '4:3': '2048x1536', '3:4': '1536x2048', '16:9': '2048x1152', '9:16': '1152x2048' },
-  '4K': { '1:1': '4096x4096', '4:3': '4096x3072', '3:4': '3072x4096', '16:9': '3840x2160', '9:16': '2160x3840' },
+  '1K': { '9:16': '576x1024', '2:3': '683x1024', '3:4': '768x1024', '4:5': '819x1024', '1:1': '1024x1024', '5:4': '1024x819', '4:3': '1024x768', '3:2': '1024x683', '16:9': '1024x576', '21:9': '1024x439' },
+  '2K': { '9:16': '1152x2048', '2:3': '1365x2048', '3:4': '1536x2048', '4:5': '1638x2048', '1:1': '2048x2048', '5:4': '2048x1638', '4:3': '2048x1536', '3:2': '2048x1365', '16:9': '2048x1152', '21:9': '2048x878' },
+  '4K': { '9:16': '2160x3840', '2:3': '2731x4096', '3:4': '3072x4096', '4:5': '3277x4096', '1:1': '4096x4096', '5:4': '4096x3277', '4:3': '4096x3072', '3:2': '4096x2731', '16:9': '3840x2160', '21:9': '4096x1755' },
 }
-const GENERATION_COMPATIBLE_SIZES = { '1:1': '1024x1024', '16:9': '1792x1024', '9:16': '1024x1792', '4:3': '1024x768', '3:4': '768x1024' }
+const GENERATION_COMPATIBLE_SIZES = { '9:16': '1024x1792', '2:3': '1024x1536', '3:4': '1024x1365', '4:5': '1024x1280', '1:1': '1024x1024', '5:4': '1280x1024', '4:3': '1024x768', '3:2': '1536x1024', '16:9': '1792x1024', '21:9': '1792x768' }
 const generationModelFor = (baseModel, quality) => {
   if (!baseModel?.startsWith('nano-banana-pro')) return baseModel
   return quality === '1K' ? 'nano-banana-pro_1K' : quality === '4K' ? 'nano-banana-pro_4k' : 'nano-banana-pro_2k'
@@ -53,14 +126,14 @@ const generationModelFor = (baseModel, quality) => {
 const parseGenerationCommand = (value, node) => {
   const normalized = value.replace(/：/g, ':').toUpperCase()
   if (!/(生成|生图|出图|方案)/.test(normalized)) return null
-  const aspect = normalized.match(/(?:16:9|9:16|4:3|3:4|1:1)/)?.[0] || node?.generationAspect || GENERATION_DEFAULTS.generationAspect
+  const aspect = normalized.match(/(?:21:9|16:9|9:16|5:4|4:5|3:2|2:3|4:3|3:4|1:1)/)?.[0] || node?.generationAspect || GENERATION_DEFAULTS.generationAspect
   const quality = normalized.match(/(?:1K|2K|4K)/)?.[0] || node?.generationQuality || GENERATION_DEFAULTS.generationQuality
   const countMatch = normalized.match(/生成\s*(\d)\s*(?:张|个|套|款|幅|方案)?/) || normalized.match(/(\d)\s*(?:张|个方案|套方案|款方案|幅)/)
   const count = Math.max(1, Math.min(4, Number(countMatch?.[1] || node?.generationCount || GENERATION_DEFAULTS.generationCount)))
   return { aspect, quality, count }
 }
 const promptWithoutGenerationCommand = (value) => value.replace(/：/g, ':')
-  .replace(/(?:^|[，,；;。\n]\s*)(?:16:9|9:16|4:3|3:4|1:1)?\s*[，,、\s]*(?:1K|2K|4K)?\s*[，,、\s]*(?:生成|生图|出图)\s*\d?\s*(?:张|个|套|款|幅|方案)*\s*[。！!]?$/i, '')
+  .replace(/(?:^|[，,；;。\n]\s*)(?:21:9|16:9|9:16|5:4|4:5|3:2|2:3|4:3|3:4|1:1)?\s*[，,、\s]*(?:1K|2K|4K)?\s*[，,、\s]*(?:生成|生图|出图)\s*\d?\s*(?:张|个|套|款|幅|方案)*\s*[。！!]?$/i, '')
   .replace(/[，,；;。\s]+$/, '')
   .trim()
 
@@ -78,6 +151,13 @@ async function compressForVision(dataURL) {
 }
 
 const dataUrlBytes = (value) => Math.ceil((value.length - value.indexOf(',') - 1) * 0.75)
+
+const readImageFile = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(reader.result)
+  reader.onerror = () => reject(new Error(`无法读取参考图：${file?.name || '未命名图片'}`))
+  reader.readAsDataURL(file)
+})
 
 // 素材原图由桌面端按项目单独保存；这里仅做一个轻量缩略图，用于素材抽屉预览。
 async function makeAssetThumbnail(dataURL) {
@@ -192,6 +272,93 @@ function GenerationTimingBreakdown({ timing }) {
   return <section className="generation-timing" title={timing.taskCount > 1 ? `按 ${timing.taskCount} 张成功图片的平均耗时汇总` : '本次生图耗时分段'}><b>本次耗时分段{timing.taskCount > 1 ? ` · ${timing.taskCount} 张平均` : ''}</b><div>{items.map(([label, value]) => <span key={label}><small>{label}</small>{formatPhaseDuration(value)}</span>)}</div></section>
 }
 
+const clampNumber = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0))
+
+function CameraOrbitControl({ rotate = 0, tilt = 0, previewUrl = '', onChange, disabled = false }) {
+  const orbitRef = useRef(null)
+  const draggingRef = useRef(false)
+  const pointFor = (horizontal, vertical) => {
+    const x = 140 + (clampNumber(horizontal, -180, 180) / 180) * 102
+    const y = 112 - (clampNumber(vertical, -60, 60) / 60) * 72
+    return { x, y }
+  }
+  const updateFromPointer = (event) => {
+    const rect = orbitRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = clampNumber(event.clientX - rect.left, 18, rect.width - 18)
+    const y = clampNumber(event.clientY - rect.top, 18, rect.height - 18)
+    onChange?.({ generationRotate: Math.round(clampNumber(((x - rect.width / 2) / (rect.width * 0.42)) * 180, -180, 180)), generationTilt: Math.round(clampNumber(((rect.height / 2 - y) / (rect.height * 0.32)) * 60, -60, 60)) })
+  }
+  const start = (event) => {
+    if (disabled) return
+    event.preventDefault(); event.stopPropagation(); draggingRef.current = true
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    updateFromPointer(event)
+  }
+  const move = (event) => { if (draggingRef.current) { event.preventDefault(); updateFromPointer(event) } }
+  const stop = (event) => { draggingRef.current = false; event.currentTarget.releasePointerCapture?.(event.pointerId) }
+  const point = pointFor(rotate, tilt)
+  return <div ref={orbitRef} className={`camera-orbit ${disabled ? 'disabled' : ''}`} onPointerDown={start} onPointerMove={move} onPointerUp={stop} onPointerCancel={stop} title="拖动摄像机调整视角">
+    <svg viewBox="0 0 280 224" role="img" aria-label="摄像机视角控制球">
+      <ellipse cx="140" cy="112" rx="102" ry="72" className="orbit-ring orbit-ring-horizontal" />
+      <ellipse cx="140" cy="112" rx="102" ry="32" className="orbit-ring orbit-ring-depth" />
+      <ellipse cx="140" cy="112" rx="48" ry="72" className="orbit-ring orbit-ring-vertical" />
+      <path d="M38 112h204M140 40v144" className="orbit-axis" />
+      <circle cx="140" cy="112" r="24" className="orbit-subject" />
+      {previewUrl && <image href={previewUrl} x="116" y="94" width="48" height="36" preserveAspectRatio="xMidYMid slice" className="orbit-preview" />}
+      <g className="orbit-camera" transform={`translate(${point.x} ${point.y})`}>
+        <rect x="-15" y="-10" width="30" height="20" rx="4" />
+        <path d="M-8-10l4-6h8l4 6M15-4l9-5v18l-9-5z" />
+        <circle cx="0" cy="0" r="5" />
+      </g>
+      <text x="140" y="207" className="orbit-hint">拖动摄像机</text>
+    </svg>
+  </div>
+}
+
+function MultiAngleDialog({ value = {}, previewUrl = '', onUse, onClose, disabled = false }) {
+  const initial = { ...MULTI_ANGLE_DEFAULTS, ...value, generationMultiAngleEnabled: true }
+  const [draft, setDraft] = useState(initial)
+  const [referenceError, setReferenceError] = useState('')
+  useEffect(() => setDraft({ ...MULTI_ANGLE_DEFAULTS, ...value, generationMultiAngleEnabled: true }), [value?.generationAngleMode, value?.generationRotate, value?.generationTilt, value?.generationScale, value?.generationBacksideReference?.id, value?.generationBacksideReference?.dataURL, value?.generationActionLock])
+  const patch = (changes) => setDraft((current) => ({ ...current, ...changes, generationMultiAngleEnabled: true }))
+  const scaleLabel = angleScaleLabel(draft.generationScale)
+  const extreme = Math.abs(Number(draft.generationRotate) || 0) >= 120 || Math.abs(Number(draft.generationTilt) || 0) >= 45
+  const backsideReference = draft.generationBacksideReference?.dataURL ? draft.generationBacksideReference : null
+  const selectBacksideReference = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const dataURL = await readImageFile(file)
+      setReferenceError('')
+      patch({ generationBacksideReference: { id: uid(), dataURL, name: file.name || '产品背面参考图', mimeType: file.type || 'image/png', role: '同一产品的背面参考图' } })
+    } catch (error) {
+      setReferenceError(errorMessage(error, '背面参考图读取失败，请重试'))
+    }
+  }
+  return <div className="multi-angle-backdrop" onMouseDown={onClose}>
+    <section className="multi-angle-dialog" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><small>MULTI-ANGLE</small><h3>多角度</h3></div><button type="button" onClick={onClose}>×</button></header>
+      <div className="multi-angle-tabs"><button type="button" className={draft.generationAngleMode === 'subject' ? 'active' : ''} onClick={() => patch({ generationAngleMode: 'subject' })}>主体</button><button type="button" className={draft.generationAngleMode !== 'subject' ? 'active' : ''} onClick={() => patch({ generationAngleMode: 'camera' })}>摄像机</button></div>
+      <div className="multi-angle-orbit-wrap"><CameraOrbitControl rotate={draft.generationRotate} tilt={draft.generationTilt} previewUrl={previewUrl} disabled={disabled || draft.generationAngleMode === 'subject'} onChange={patch} /></div>
+      <div className="multi-angle-sliders">
+        <label><span>旋转 <output>{signedAngle(draft.generationRotate)}</output></span><input type="range" min="-180" max="180" value={Number(draft.generationRotate) || 0} disabled={disabled} onChange={(event) => patch({ generationRotate: Number(event.target.value) })} /></label>
+        <label><span>倾斜 <output>{signedAngle(draft.generationTilt)}</output></span><input type="range" min="-60" max="60" value={Number(draft.generationTilt) || 0} disabled={disabled} onChange={(event) => patch({ generationTilt: Number(event.target.value) })} /></label>
+        <label><span>缩放 <output>{scaleLabel}</output></span><select value={draft.generationScale || 'medium'} disabled={disabled} onChange={(event) => patch({ generationScale: event.target.value })}><option value="close">近景</option><option value="medium">中景</option><option value="wide">远景</option></select></label>
+      </div>
+       <small className="multi-angle-note">拖动摄像机后，旋转和倾斜数值会同步更新。第一版通过现有生图模型生成视角变体。</small>{extreme && <small className="multi-angle-warning">当前是极端视角：模型会补全原图看不到的区域，已自动优先锁定人物动作和产品结构；如仍需更稳定，建议先用 60°–90° 的中等变化。</small>}
+       <label className="multi-angle-action-lock"><input type="checkbox" checked={draft.generationActionLock !== false} disabled={disabled} onChange={(event) => patch({ generationActionLock: event.target.checked })} /><span><b>锁定人物当前动作</b><small>只改变镜头投影，不重新摆姿势；关闭后人物可能随场景重新生成。</small></span></label>
+       <section className="multi-angle-reference">
+         <div className="multi-angle-reference-heading"><div><b>背面参考图（可选）</b><small>正面切换背面时上传同一产品的背面图，帮助模型还原真实结构。</small></div>{backsideReference && <button type="button" onClick={() => { setReferenceError(''); patch({ generationBacksideReference: null }) }} disabled={disabled}>删除</button>}</div>
+         {backsideReference ? <figure><img src={backsideReference.dataURL} alt="产品背面参考图" /><figcaption><strong>{backsideReference.name || '已上传背面参考图'}</strong><span>将作为同一产品的另一面结构依据发送</span></figcaption><label className="multi-angle-reference-replace">重新选择<input type="file" accept="image/*" onChange={selectBacksideReference} disabled={disabled} /></label></figure> : <label className="multi-angle-reference-upload"><span>＋ 上传产品背面图</span><small>建议使用同一产品、相近比例的白底图或清晰实拍图</small><input type="file" accept="image/*" onChange={selectBacksideReference} disabled={disabled} /></label>}
+         {referenceError && <small className="multi-angle-reference-error">{referenceError}</small>}
+       </section>
+       <footer><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={disabled} onClick={() => onUse(draft)}>立即使用 ↗</button></footer>
+    </section>
+  </div>
+}
+
 function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
   const generationGuardUntil = useRef(0)
@@ -252,7 +419,9 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
       const parent = nodeById.get(node.parentNodeId)
       if (!source && !parent) return null
       const link = connector(parent || source, node)
-      return <g className="workflow-link" key={node.id}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" />{source && <g className="workflow-link-control" role="button" aria-label="断开图片与提示词节点" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDisconnect(node.id) }}><circle cx={link.middle.x} cy={link.middle.y} r="12" /><text x={link.middle.x} y={link.middle.y + 4}>×</text></g>}</g>
+      const relation = parent ? 'parent' : 'source'
+      const relationLabel = parent ? '断开两个提示词节点' : '断开图片与提示词节点'
+      return <g className="workflow-link" key={node.id}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /><g className="workflow-link-control" role="button" aria-label={relationLabel} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDisconnect(node.id, relation) }}><circle cx={link.middle.x} cy={link.middle.y} r="12" /><text x={link.middle.x} y={link.middle.y + 4}>×</text></g></g>
     })}{nodes.flatMap((node) => (node.generatedElementIds || []).map((id) => {
       const target = elementById.get(id)
       if (!target) return null
@@ -269,14 +438,14 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
         {node.kind !== 'skill' && <label className="node-template">{node.kind === 'modify' ? '修改所用模板' : '重新生成模板'}<select value={node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select><small>上次实际使用：{node.templateLabel || '默认视觉反推模板'}</small></label>}
         {node.kind === 'skill' && <small className="node-composition-note">Skill v{node.skillVersion || 1} · 输入：{(node.skillRequires || []).join('、') || '无'} · 输出：{node.skillOutputType === 'analysis' ? '分析与建议' : '完整提示词'}</small>}
         {node.kind === 'modify' && <><label>原版提示词<textarea value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /></label><label>修改要求<textarea placeholder="描述你要修改的画面内容…" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value })} /></label><label className="node-reference">补充参考图片（最多 8 张）<input type="file" multiple accept="image/*" onChange={(event) => onAttachImage(node.id, event.target.files)} /><div className="node-reference-grid">{references.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '修改参考图'} /><input value={image.role || ''} placeholder="用途，如：产品外观" onChange={(event) => onUpdate(node.id, { referenceImages: references.map((item) => item.id === image.id ? { ...item, role: event.target.value } : item), referenceImage: null })} /><button onClick={() => onRemoveImage(node.id, image.id)}>删除</button></figure>)}</div></label></>}
-        {node.kind === 'compose' && <small className="node-composition-note">已关联 {references.length} 张产品参考图；编辑提示词或重新生成均会保留这些参考。</small>}
+        {node.kind === 'compose' && <small className="node-composition-note">已关联 {references.length} 张产品参考图{node.promptReferenceImages?.length ? `，另有 ${node.promptReferenceImages.length} 张提示词参考图` : ''}；编辑提示词或重新生成均会保留产品参考。</small>}
         <label>{node.kind === 'modify' ? '修改结果（可直接编辑）' : node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
         {!!node.versionHistory?.length && <details className="node-versions"><summary>历史版本（{node.versionHistory.length}）</summary>{[...node.versionHistory].reverse().map((version, index) => <button key={version.id || index} onClick={() => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: version.prompt, model: version.model || node.model, templateId: version.templateId || node.templateId, templateLabel: version.templateLabel || node.templateLabel })}><b>{new Date(version.createdAt || Date.now()).toLocaleString()}</b><span>{version.templateLabel || version.model || '历史结果'}</span></button>)}</details>}
         {node.error && <p className="node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
         {node.generationError && <p className="node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
         <GenerationTimingBreakdown timing={node.generationTiming} />
-        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{['16:9','1:1','4:3','3:4','9:16'].map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label><label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label></section>
-        <footer>{node.kind === 'prompt' ? <><button onClick={() => onRegenerate(node)} disabled={node.busy}>↻ {node.busy ? '生成中…' : '重新生成'}</button><button className="node-primary" onClick={() => onModify(node)}>✎ 用于提示词修改</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '生成预览'}</button></> : node.kind === 'compose' ? <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '按组合生图'}</button> : node.kind === 'skill' ? <>{node.skillOutputType === 'prompt' && <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, { ...node, prompt: node.output, output: node.output })} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '生成中…' : '用结果生成预览'}</button>}<button onClick={() => navigator.clipboard.writeText(node.output || '')}>复制结果</button></> : <><button className="node-primary" onClick={() => onRegenerate(node, true)} disabled={node.busy}>▶ {node.busy ? '生成中…' : '生成修改提示词'}</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '改图中…' : '验证改图'}</button></>}{node.generationBusy && <button className="node-cancel-generation" onClick={() => onCancelGeneration(node)}>取消生图</button>}<button onClick={() => onDelete(node.id)}>删除节点</button></footer>
+        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label><label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label></section>
+         <footer>{node.kind === 'prompt' ? <><button onClick={() => onRegenerate(node)} disabled={node.busy}>↻ {node.busy ? '生成中…' : '重新生成'}</button><button className="node-primary" onClick={() => onModify(node)}>✎ 用于提示词修改</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '生成预览'}</button></> : node.kind === 'compose' ? <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '按组合生图'}</button> : node.kind === 'skill' ? <>{node.skillOutputType === 'prompt' && <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, { ...node, prompt: node.output, output: node.output })} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '生成中…' : '用结果生成预览'}</button>}<button onClick={() => navigator.clipboard.writeText(node.output || '')}>复制结果</button></> : <><button className="node-primary" onClick={() => onRegenerate(node, true)} disabled={node.busy}>▶ {node.busy ? '生成中…' : '生成修改提示词'}</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '改图中…' : '验证改图'}</button></>}{node.generationBusy && <button className="node-cancel-generation" onClick={() => onCancelGeneration(node)}>取消生图</button>}<button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button></footer>
         </>}
       </article>
     })}
@@ -330,6 +499,7 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState(() => loadProjects()[0].id)
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [selected, setSelected] = useState(null)
+  const [multiAngleOpen, setMultiAngleOpen] = useState(false)
   const [aiStatus, setAiStatus] = useState(null)
   const [reverseBusy, setReverseBusy] = useState(false)
   const [reversePrompt, setReversePrompt] = useState('')
@@ -344,6 +514,11 @@ function App() {
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
+  const [compositionReferences, setCompositionReferences] = useState([])
+  const [compositionInstruction, setCompositionInstruction] = useState('')
+  const [compositionPromptResult, setCompositionPromptResult] = useState('')
+  const [compositionPromptBusy, setCompositionPromptBusy] = useState(false)
+  const [compositionPromptError, setCompositionPromptError] = useState('')
   const [imageService, setImageService] = useState({ configured: false, baseUrl: '', model: '', mode: 'openai', generatePath: '/images/generations', editPath: '/images/edits', statusPath: '', cancelPath: '', defaultSize: '1024x1024', downloadDirectory: '', apiKey: '' })
   const [imageServiceMessage, setImageServiceMessage] = useState('')
   const [directoryDialogBusy, setDirectoryDialogBusy] = useState(false)
@@ -388,6 +563,7 @@ function App() {
   const aiStatusSignatureRef = useRef('')
   const input = useRef(null)
   const projectInput = useRef(null)
+  const compositionReferenceInput = useRef(null)
   const boardRef = useRef(null)
   const canvasSelectionRef = useRef('')
   const nodeHistoryRef = useRef({ past: [], future: [] })
@@ -699,6 +875,12 @@ function App() {
   }).filter(Boolean), [selectedProductElements, workflowNodes])
   const canComposeGeneration = Boolean(selectedCanvasPrompt && selectedProductReferences.length)
   useEffect(() => {
+    setCompositionReferences([])
+    setCompositionInstruction('')
+    setCompositionPromptResult('')
+    setCompositionPromptError('')
+  }, [selectedCanvasPrompt])
+  useEffect(() => {
     const refresh = () => invoke('get_ai_config_status').then((status) => {
       const signature = JSON.stringify(status)
       if (signature === aiStatusSignatureRef.current) return
@@ -897,7 +1079,7 @@ function App() {
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     return node.id
   }
-  const createCompositionNode = () => {
+  const createCompositionNode = (promptOverride = '', promptReferenceImages = []) => {
     if (!canComposeGeneration) { alert('请同时选中至少一段提示词文本和一张产品参考图。'); return null }
     const source = selectedProductElements[0]
     recordNodeHistory()
@@ -905,8 +1087,8 @@ function App() {
       id: uid(), kind: 'compose', sourceElementId: source.id, parentNodeId: null,
       x: source.x + source.width + 160, y: source.y, width: 620, height: 520,
       model: imageService.model || '当前生图模型', templateId: '', templateLabel: '画布组合生图',
-      prompt: selectedCanvasPrompt, instruction: '', output: '', busy: false, status: 'completed',
-      referenceImages: selectedProductReferences, versionHistory: [], ...GENERATION_DEFAULTS,
+      prompt: promptOverride.trim() || selectedCanvasPrompt, instruction: compositionInstruction.trim(), output: '', busy: false, status: 'completed',
+      referenceImages: selectedProductReferences, promptReferenceImages, versionHistory: [], ...GENERATION_DEFAULTS,
     }
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
@@ -914,10 +1096,50 @@ function App() {
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     return node
   }
-  const generateComposition = () => {
+  const generateComposition = (promptOverride = '', promptReferenceImages = []) => {
     if (!imageService.configured) return alert('请先完成图像服务设置。')
-    const node = createCompositionNode()
+    const node = createCompositionNode(promptOverride, promptReferenceImages)
     if (node) generatePreview(node)
+  }
+  const addCompositionReferences = async (fileList) => {
+    const files = [...(fileList || [])].filter((file) => file?.type?.startsWith('image/'))
+    if (!files.length) return
+    const remaining = Math.max(0, 8 - compositionReferences.length)
+    if (!remaining) return setCompositionPromptError('最多只能添加 8 张额外参考图。')
+    try {
+      const additions = await Promise.all(files.slice(0, remaining).map(async (file) => ({ id: uid(), dataURL: await readImageFile(file), name: file.name, mimeType: file.type || 'image/png', role: '场景、构图或风格参考' })))
+      setCompositionReferences((current) => [...current, ...additions].slice(0, 8))
+      setCompositionPromptError('')
+    } catch (error) { setCompositionPromptError(errorMessage(error, '参考图读取失败，请重试')) }
+  }
+  const updateCompositionReference = (id, patch) => setCompositionReferences((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item))
+  const removeCompositionReference = (id) => setCompositionReferences((current) => current.filter((item) => item.id !== id))
+  const modifyCompositionPrompt = async () => {
+    if (!canComposeGeneration || compositionPromptBusy) return
+    if (!compositionReferences.length) return setCompositionPromptError('请先上传至少 1 张额外参考图，再让 AI 修改组合提示词。')
+    setCompositionPromptBusy(true)
+    setCompositionPromptError('')
+    try {
+      const productReferences = selectedProductReferences.map((item) => ({ ...item, role: '产品白底图，只用于锁定产品外观，不用于改变产品型号' }))
+      const visualReferences = compositionReferences.map((item) => ({ ...item, role: item.role || '场景、构图或风格参考' }))
+      const visionImage = await composeVisionReferences(productReferences[0], [...productReferences.slice(1), ...visualReferences])
+      const referenceRoles = visualReferences.map((item, index) => `额外参考图${index + 1}用途：${item.role}`).join('；')
+      const instruction = [
+        '这是“文案＋产品白底图”的组合生图提示词修改任务。保留原文案的商业目标、产品事实和核心画面意图；产品白底图只作为产品外观唯一依据。',
+        '请吸收额外参考图中的场景、构图、镜头、光线、色彩和氛围，不要照搬额外参考图中的产品，不要把额外参考图误认为产品型号。',
+        referenceRoles,
+        compositionInstruction.trim() || '根据额外参考图优化当前文案，输出一段完整、可直接用于生图的中文提示词。不要解释过程，不要输出前言。',
+      ].filter(Boolean).join('\n')
+      const result = await invoke('reverse_image_prompt', { imageDataUrl: visionImage, templateId: selectedTemplateId || null, originalPrompt: selectedCanvasPrompt, instruction })
+      if (!result?.prompt) throw new Error('AI 没有返回可用的修改后提示词')
+      setCompositionPromptResult(result.prompt)
+    } catch (error) { setCompositionPromptError(errorMessage(error, '组合提示词修改失败，请重试')) }
+    finally { setCompositionPromptBusy(false) }
+  }
+  const generateModifiedComposition = () => {
+    const prompt = compositionPromptResult.trim()
+    if (!prompt) return alert('请先生成或填写修改后的组合提示词。')
+    generateComposition(prompt, compositionReferences)
   }
   const importCanvasPayload = async (payload) => {
     if (!payload?.imageDataUrl?.startsWith('data:image/')) return
@@ -974,16 +1196,17 @@ function App() {
     setWorkflowNodes(nodes)
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
-  const disconnectWorkflowNode = (id) => {
+  const disconnectWorkflowNode = (id, relation = 'source') => {
     recordNodeHistory()
-    const nodes = (sceneRef.current.workflowNodes || []).map((node) => node.id === id ? { ...node, sourceElementId: null } : node)
+    const patch = relation === 'parent' ? { parentNodeId: null } : { sourceElementId: null }
+    const nodes = (sceneRef.current.workflowNodes || []).map((node) => node.id === id ? { ...node, ...patch } : node)
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
   const deleteWorkflowNode = (id) => {
     recordNodeHistory()
-    const nodes = (sceneRef.current.workflowNodes || []).filter((node) => node.id !== id)
+    const nodes = (sceneRef.current.workflowNodes || []).filter((node) => node.id !== id).map((node) => node.parentNodeId === id ? { ...node, parentNodeId: null } : node)
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
     setSelectedNodeIds((current) => current.filter((item) => item !== id))
@@ -1125,6 +1348,50 @@ function App() {
   }
 
   const selectedWorkflowNode = workflowNodes.find((node) => selectedNodeIds.includes(node.id)) || null
+  // 生成结果图片也带有 promptNodeId；选中它时，允许沿用原提示词继续做视角变体。
+  const selectedImageNode = selected?.type === 'image' && selected?.customData?.promptNodeId
+    ? workflowNodes.find((node) => node.id === selected.customData.promptNodeId) || null
+    : null
+  const assistantGenerationNode = selectedWorkflowNode || selectedImageNode
+  const ensureAssistantGenerationNode = () => {
+    if (assistantGenerationNode) return assistantGenerationNode
+    if (!selectedFile?.dataURL || selected?.type !== 'image') return null
+    const prompt = selected?.customData?.prompt || selected?.customData?.generation?.effectivePrompt || reversePrompt
+    if (!prompt?.trim()) return null
+    const generation = selected?.customData?.generation || {}
+    const nodeId = addPromptNode(prompt, generation.model || imageService.model || aiStatus?.model || '当前模型', 'reverse', selected, null)
+    const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
+    if (node) setSelectedNodeIds([node.id])
+    return node
+  }
+  const openMultiAngleForSelection = () => {
+    const node = ensureAssistantGenerationNode()
+    if (!node) { alert('这张图片没有关联提示词，请先反推提示词后再调整视角。'); return }
+    setMultiAngleOpen(true)
+  }
+  const applyMultiAngleAndGenerate = async (draft) => {
+    const node = ensureAssistantGenerationNode()
+    if (!node) { alert('这张图片没有关联提示词，请先反推提示词后再调整视角。'); return }
+    // 直接把对话框草稿传给生成函数，避免先 setState 再读取旧节点导致“点击后没有反应”。
+    const nextNode = { ...node, ...draft, generationMultiAngleEnabled: true }
+    updateWorkflowNode(node.id, draft)
+    setMultiAngleOpen(false)
+    await generateAssistantPreview(nextNode)
+  }
+  const runAssistantGeneration = async () => {
+    const node = ensureAssistantGenerationNode()
+    if (!node) { alert('请先选中一张已有生图，或选择一个提示词节点。'); return }
+    await generateAssistantPreview(node)
+  }
+  const selectedImageGeneration = selected?.customData?.generation || {}
+  const assistantGenerationValue = assistantGenerationNode || {
+    ...GENERATION_DEFAULTS,
+    generationMultiAngleEnabled: selectedImageGeneration.multiAngle === true,
+    generationAngleMode: selectedImageGeneration.angleMode || 'camera',
+    generationRotate: Number(selectedImageGeneration.rotate || 0),
+    generationTilt: Number(selectedImageGeneration.tilt || 0),
+    generationScale: selectedImageGeneration.scale || 'medium',
+  }
   const assistantContext = selectedWorkflowNode ? (selectedWorkflowNode.kind === 'modify' || selectedWorkflowNode.kind === 'skill' ? (selectedWorkflowNode.output || selectedWorkflowNode.prompt) : selectedWorkflowNode.prompt) : reversePrompt
   const assistantContextTitle = selectedWorkflowNode ? `${selectedWorkflowNode.kind === 'modify' ? '提示词修改' : selectedWorkflowNode.kind === 'compose' ? '组合生图' : selectedWorkflowNode.kind === 'skill' ? (selectedWorkflowNode.skillName || 'Skill') : '提示词反推'}节点` : canComposeGeneration ? '已选提示词与产品图' : selectedFile ? '已选图片' : '未选择内容'
   const assistantTemplate = selectedWorkflowNode?.templateLabel || aiStatus?.promptTemplates?.find((item) => item.id === selectedTemplateId)?.label || '当前默认模板'
@@ -1285,28 +1552,32 @@ function App() {
   }
   const generateAssistantPreview = async (node, promptOverride = null) => {
     if (!node) return
-    // The image selected on the canvas is an explicit user choice for the
-    // assistant preview, so persist it on the node before submitting. This
-    // prevents the old scene/source image from being mistaken for the product.
-    const selectedReference = selectedFile?.dataURL ? {
+    // 视角变体时，当前选中的已生成场景图是“编辑底图”，不是产品参考图。
+    // 只有白底/产品参考图进入 referenceImages，避免模型把整张旧场景锁死。
+    const selectedCanvasImage = selectedFile?.dataURL ? {
       id: selected?.fileId || selectedFile.id || uid(),
       dataURL: selectedFile.dataURL,
-      name: '当前选中产品参考图',
+      name: '当前选中场景底图',
       mimeType: selectedFile.mimeType || 'image/png',
-      role: '唯一产品外观依据',
+      role: '仅用于保持场景、光线和构图的编辑底图',
     } : null
     const existingReferences = (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
-    const referenceImages = selectedReference
-      ? [selectedReference, ...existingReferences.filter((image) => image.dataURL !== selectedReference.dataURL)].slice(0, 8)
-      : existingReferences
+    const editingExistingGeneratedScene = Boolean(selectedImageNode && selectedCanvasImage)
+    const referenceImages = editingExistingGeneratedScene
+      ? existingReferences
+      : selectedCanvasImage
+        ? [selectedCanvasImage, ...existingReferences.filter((image) => image.dataURL !== selectedCanvasImage.dataURL)].slice(0, 8)
+        : existingReferences
     const previewNode = {
       ...node,
       ...(promptOverride ? { prompt: promptOverride, output: promptOverride } : {}),
       referenceImages,
       referenceImage: null,
-      productConsistency: selectedReference ? true : node.productConsistency,
+      generationEditImage: editingExistingGeneratedScene ? selectedCanvasImage : null,
+      productConsistency: editingExistingGeneratedScene ? (existingReferences.length ? true : node.productConsistency) : (selectedCanvasImage ? true : node.productConsistency),
     }
-    if (selectedReference) updateWorkflowNode(node.id, { referenceImages, referenceImage: null, productConsistency: true })
+    // 节点本身仍保存产品参考图；已生成场景底图只存在于本次请求中。
+    if (selectedCanvasImage && !editingExistingGeneratedScene) updateWorkflowNode(node.id, { referenceImages, referenceImage: null, productConsistency: true })
     await generatePreview(previewNode)
   }
   const generateAssistantMessagePreview = async (message) => {
@@ -1324,7 +1595,8 @@ function App() {
     if ((sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)?.generationBusy) return
     const basePrompt = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt; if (!basePrompt?.trim()) return
     const keepProduct = node.productConsistency !== false
-    const prompt = keepProduct ? `${PRODUCT_CONSISTENCY_INSTRUCTION}\n\n${basePrompt}` : basePrompt
+    const multiAngleInstruction = buildMultiAngleInstruction(node)
+      const prompt = [keepProduct ? PRODUCT_CONSISTENCY_INSTRUCTION : '', basePrompt, multiAngleInstruction].filter(Boolean).join('\n\n')
       const quality = node.generationQuality || GENERATION_DEFAULTS.generationQuality, aspect = node.generationAspect || GENERATION_DEFAULTS.generationAspect
       const count = Math.max(1, Math.min(4, Number(node.generationCount || GENERATION_DEFAULTS.generationCount))), requestedSize = GENERATION_SIZES[quality]?.[aspect] || '2048x1152', size = GENERATION_COMPATIBLE_SIZES[aspect] || '1792x1024'
     const generationModel = generationModelFor(imageService.model, quality)
@@ -1340,19 +1612,39 @@ function App() {
       // including ordinary prompt nodes started from the assistant.  Previously
       // prompt nodes silently discarded it and fell back to their source scene.
       const replacementReferences = (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
+      const backsideReference = node.generationBacksideReference?.dataURL ? node.generationBacksideReference : null
+      const requestProductReferences = replacementReferences.slice(0, backsideReference ? 7 : 8)
       const replacementReference = replacementReferences[0] || null
       const sourceImage = sourceFileForNode(node)
-      const editImage = replacementReference || (keepProduct ? sourceImage : null)
+      const explicitEditImage = node.generationEditImage?.dataURL ? node.generationEditImage : null
+      const editImage = explicitEditImage || replacementReference || (keepProduct ? sourceImage : null)
       if (node.kind === 'modify' && !replacementReference) throw new Error('请添加产品参考图；生成不会使用原场景图')
-      const referenceRoles = replacementReferences.map((item, index) => `参考图${index + 1}用途：${item.role || '产品外观'}`).join('；')
-      const generationPrompt = referenceRoles ? `${prompt}\n\n【产品参考图锁定】${referenceRoles}。这些图片是本次生成的唯一产品事实来源；当文字描述与参考图存在冲突时，以参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。输入图片仅用于锁定产品外观，新场景以上述完整提示词为准。` : prompt
-      const generationReferences = replacementReferences.length ? replacementReferences : (editImage ? [editImage] : [])
-      if (generationReferences.length) updateActive({ generationStatus: `正在压缩 ${generationReferences.length} 张产品参考图以适配接口限制…` })
-      const requestReferenceImages = await prepareGenerationReferences(generationReferences)
+      const referenceRoles = requestProductReferences.map((item, index) => `产品参考图${index + 1}用途：${item.role || '产品外观'}`).join('；')
+      const backsideReferenceRole = backsideReference ? '【背面参考图已上传】本次请求的最后一张参考图就是当前产品的背面/另一面。请把它视为同一型号的结构事实，用来补全目标视角中可见的背面，不得把它当成另一款产品或场景风格参考。' : ''
+      const editRole = explicitEditImage
+        ? node.generationMultiAngleEnabled === true
+          ? '当前选中的第一张输入图是同一场景的编辑底图，用于识别人物、产品、背景、光线和真实空间关系；它不是要锁死的原构图。摄像机模式下必须对整张场景重新构图，让人物、产品和背景一起随目标机位改变；若开启人物动作锁定，人物只允许改变投影、可见侧面和遮挡，不得重新摆姿势或把原人物贴回原背景位置。'
+          : '当前选中的第一张输入图是场景编辑底图，用于保持人物、环境、光线和整体氛围；不要把场景中的原有产品当成产品结构参考。'
+        : ''
+      const finalAnglePriority = node.generationMultiAngleEnabled === true ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；${describeCameraScale(node.generationScale)}如果原图是中远景而目标是近景，输出必须明显收紧取景，让产品成为画面主体。` : ''
+      const generationPrompt = [
+        prompt,
+        editRole,
+        referenceRoles ? `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
+        backsideReferenceRole,
+        explicitEditImage ? `【视角变体最终覆盖指令】必须实际改变摄像机位置，并让人物、产品、背景透视和遮挡关系同步改变；不能只复用原图构图，也不能只翻转产品。原提示词中关于旧视角、旧机位、旧景别和旧构图的描述仅作为场景事实，不得覆盖当前目标角度。${node.generationActionLock !== false ? '人物当前动作是锁定项，只能重新投影，不能改动作。' : ''}` : '',
+        finalAnglePriority,
+      ].filter(Boolean).join('\n\n')
+      const productReferenceImages = requestProductReferences.length ? await prepareGenerationReferences(requestProductReferences) : []
+      const backsideReferenceDataUrl = backsideReference ? await prepareGenerationReference(backsideReference.dataURL, 700 * 1024) : null
+      const editImageDataUrl = editImage ? await prepareGenerationReference(editImage.dataURL, 700 * 1024) : null
+      const requestReferenceImages = explicitEditImage
+        ? [editImageDataUrl, ...productReferenceImages, backsideReferenceDataUrl].filter(Boolean).slice(0, 8)
+        : productReferenceImages.length ? [...productReferenceImages, backsideReferenceDataUrl].filter(Boolean).slice(0, 8) : [editImageDataUrl, backsideReferenceDataUrl].filter(Boolean).slice(0, 8)
       ensureActive()
       const preparationMs = Date.now() - startedAt
-      const editImageDataUrl = requestReferenceImages[0] || null
       if (replacementReference) updateActive({ generationStatus: `正在锁定${node.kind === 'compose' ? `${replacementReferences.length} 张产品参考图` : `产品参考图“${replacementReference.name || replacementReference.role || '当前选中产品'}”`}生成` })
+      else if (explicitEditImage) updateActive({ generationStatus: '正在以当前生成场景为编辑底图，准备生成目标视角…' })
       let submittedCount = 0, completedCount = 0, failedCount = 0, nextIndex = 0
       const failureDetails = []
       const taskIds = new Set(), taskTimings = []
@@ -1386,7 +1678,7 @@ function App() {
           updateActive({ generationStatus: `正在下载第 ${resultIndex + 1}/${count} 张 · 已完成 ${completedCount}/${count}` })
           const downloaded = await invoke('download_generation_result', { source: task.imageUrl })
           ensureActive()
-          await addGeneratedImage(downloaded.dataUrl, node, { taskId, model: generationModel, effectivePrompt: generationPrompt, resultIndex, requestedSize, aspect, quality, sourceUrl: task.imageUrl })
+           await addGeneratedImage(downloaded.dataUrl, node, { taskId, model: generationModel, effectivePrompt: generationPrompt, resultIndex, requestedSize, aspect, quality, sourceUrl: task.imageUrl, multiAngle: node.generationMultiAngleEnabled === true, angleMode: node.generationAngleMode || 'camera', rotate: Number(node.generationRotate || 0), tilt: Number(node.generationTilt || 0), scale: node.generationScale || 'medium', backsideReference: Boolean(backsideReference) })
           const finishedImageAt = Date.now()
           taskTimings.push({ submitMs: submittedAt - submitStartedAt, serverMs: downloadStartedAt - submittedAt, downloadMs: finishedImageAt - downloadStartedAt })
           completedCount += 1
@@ -1440,7 +1732,7 @@ function App() {
       alert(`原图已下载到：${result.path}`)
     } catch (error) { alert(`原图下载失败：${errorMessage(error)}`) }
   }
-  const generatedSavePosition = selected?.customData?.promptNodeId ? { left: Math.max(12, (selected.x + (viewport.scrollX || 0)) * (viewport.zoom || 1)), top: Math.max(110, (selected.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 44) } : null
+  const selectedImageToolbarPosition = selected?.type === 'image' ? { left: Math.max(12, (selected.x + (viewport.scrollX || 0)) * (viewport.zoom || 1)), top: Math.max(54, (selected.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48) } : null
   const openPromptVault = () => {
     // 切换立即发生；大场景保存移到浏览器空闲时段，避免阻塞按钮反馈。
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, sceneRef.current.workflowNodes || [])
@@ -1600,7 +1892,13 @@ function App() {
           <MainMenu><MainMenu.DefaultItems.SaveAsImage /></MainMenu>
         </Excalidraw>
         <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
-        {generatedSavePosition && <div className="generated-image-actions" style={generatedSavePosition}><button onPointerDown={(event) => event.stopPropagation()} onClick={downloadGeneratedOriginal}>⇩ 下载原图</button><button onPointerDown={(event) => event.stopPropagation()} onClick={saveGeneratedImageToVault}>★ 收藏到提示词库</button></div>}
+         {selectedImageToolbarPosition && <div className="generated-image-toolbar" style={selectedImageToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
+           {selected?.customData?.promptNodeId && <><button onClick={downloadGeneratedOriginal}>⇩ 下载原图</button><button onClick={saveGeneratedImageToVault}>★ 收藏到提示词库</button></>}
+           <button className="primary" onClick={openMultiAngleForSelection}>◇ 多角度</button>
+           <button onClick={() => setSkillLibraryOpen(true)}>✦ Skill</button>
+           <button onClick={() => { setSelected(null); setSelectedCanvasIds([]); setSelectedNodeIds([]); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消</button>
+         </div>}
+         {multiAngleOpen && <MultiAngleDialog value={assistantGenerationValue} previewUrl={selectedFile?.dataURL || ''} onClose={() => setMultiAngleOpen(false)} onUse={applyMultiAngleAndGenerate} />}
       </section>
       <aside className={`detail assistant-detail ${rightTab === 'assistant' ? 'assistant-workbench' : ''}`} style={{ flexBasis: detailWidth }}>
         <div className="detail-resizer" onPointerDown={beginDetailResize} onPointerMove={resizeDetail} onPointerUp={endDetailResize} onPointerCancel={endDetailResize} title="拖动调整侧栏宽度" />
@@ -1616,13 +1914,13 @@ function App() {
           </section>
           {selectedFile && !selectedWorkflowNode && <section className="assistant-reverse-controls"><label>反推模板<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} disabled={!aiStatus?.promptTemplates?.length}>{aiStatus?.promptTemplates?.length ? aiStatus.promptTemplates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>) : <option value="">等待插件同步模板…</option>}</select></label><button className="assistant-reverse-action primary" onClick={runReversePrompt} disabled={reverseBusy || !aiStatus?.promptTemplates?.length}>{reverseBusy ? '正在压缩并反推…' : '反推这张图片的提示词'}</button><small>已选图片可按 Ctrl/Cmd + C，复制全尺寸原图到其他软件。</small></section>}
           {reverseError && !selectedWorkflowNode && <p className="assistant-inline-error">{reverseError}</p>}
-          {canComposeGeneration && !selectedWorkflowNode && <section className="assistant-composition-panel"><header><b>组合生图</b><span>画布上下文</span></header><p>将使用当前选中的提示词文本，以及 {selectedProductReferences.length} 张产品白底参考图。不会发送原场景图。</p><div className="composition-tags"><span>提示词已就绪</span><span>产品参考 ×{selectedProductReferences.length}</span></div><button className="primary" onClick={generateComposition}>按提示词＋产品图生图</button></section>}
+          {canComposeGeneration && !selectedWorkflowNode && <section className="assistant-composition-panel"><header><b>组合生图</b><span>画布上下文</span></header><p>使用当前文案和产品白底图。额外参考图仅在点击“AI 修改组合提示词”时发送给当前 AI 服务，不会作为产品型号参考。</p><div className="composition-tags"><span>提示词已就绪</span><span>产品参考 ×{selectedProductReferences.length}</span>{compositionReferences.length > 0 && <span>额外参考 ×{compositionReferences.length}</span>}</div><div className="composition-reference-upload"><b>补充参考图（最多 8 张）</b><button type="button" onClick={() => compositionReferenceInput.current?.click()} disabled={compositionReferences.length >= 8}>选择图片</button><input ref={compositionReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addCompositionReferences(event.target.files); event.target.value = '' }} /></div>{compositionReferences.length > 0 && <div className="composition-reference-grid">{compositionReferences.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '额外参考图'} /><input value={image.role || ''} placeholder="用途，如：场景构图" onChange={(event) => updateCompositionReference(image.id, { role: event.target.value })} /><button type="button" onClick={() => removeCompositionReference(image.id)}>删除</button></figure>)}</div>}<textarea className="composition-instruction" value={compositionInstruction} onChange={(event) => setCompositionInstruction(event.target.value)} placeholder="告诉 AI 你要参考什么，例如：借鉴图中的城市道路、双人骑行构图和暖色光线，但保留当前产品…" /><button className="composition-ai-action" onClick={modifyCompositionPrompt} disabled={compositionPromptBusy || !compositionReferences.length}>{compositionPromptBusy ? '正在结合参考图修改…' : '✦ AI 修改组合提示词'}</button>{compositionPromptError && <p className="composition-error">{compositionPromptError}</p>}{compositionPromptResult && <section className="composition-result"><label>修改后的提示词（可直接编辑）<textarea value={compositionPromptResult} onChange={(event) => setCompositionPromptResult(event.target.value)} /></label><div><button className="primary" onClick={generateModifiedComposition}>按修改后提示词组合生图</button><button onClick={() => setCompositionPromptResult('')}>恢复当前文案</button></div></section>}{!compositionPromptResult && <button className="primary" onClick={generateComposition}>按当前文案＋产品图生图</button>}</section>}
           <section className="assistant-generation-panel">
             <header><b>生图验证</b><span>参数与当前节点同步</span></header>
-            <div><label>比例<select value={selectedWorkflowNode?.generationAspect || GENERATION_DEFAULTS.generationAspect} disabled={!selectedWorkflowNode} onChange={(event) => updateWorkflowNode(selectedWorkflowNode.id, { generationAspect: event.target.value })}>{['16:9','1:1','4:3','3:4','9:16'].map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={selectedWorkflowNode?.generationQuality || GENERATION_DEFAULTS.generationQuality} disabled={!selectedWorkflowNode} onChange={(event) => updateWorkflowNode(selectedWorkflowNode.id, { generationQuality: event.target.value })}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={selectedWorkflowNode?.generationCount || GENERATION_DEFAULTS.generationCount} disabled={!selectedWorkflowNode} onChange={(event) => updateWorkflowNode(selectedWorkflowNode.id, { generationCount: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label></div>
-            <label className="assistant-consistency-toggle"><input type="checkbox" checked={selectedWorkflowNode?.productConsistency !== false} disabled={!selectedWorkflowNode} onChange={(event) => updateWorkflowNode(selectedWorkflowNode.id, { productConsistency: event.target.checked })} />保持产品一致（{selectedFile ? '当前选中图片将作为产品参考' : '使用关联原图'}）</label>
-            {selectedWorkflowNode?.generationBusy ? <button className="node-cancel-generation" onClick={() => cancelGeneration(selectedWorkflowNode)}>取消生图 · {formatGenerationDuration(Date.now() - Number(selectedWorkflowNode.generationStartedAt || Date.now()))}</button> : <button className="primary" disabled={!selectedWorkflowNode} onClick={() => generateAssistantPreview(selectedWorkflowNode)}>{selectedFile ? '按当前产品图生成预览' : '生成预览'}{selectedWorkflowNode?.generationElapsedMs ? ` · 上次 ${formatGenerationDuration(selectedWorkflowNode.generationElapsedMs)}` : ''}</button>}
-            <small>也可以输入：16:9，2K，生成2个方案</small>
+            <div><label>比例<select value={assistantGenerationNode?.generationAspect || GENERATION_DEFAULTS.generationAspect} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationAspect: event.target.value })}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationNode?.generationQuality || GENERATION_DEFAULTS.generationQuality} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationQuality: event.target.value })}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationNode?.generationCount || GENERATION_DEFAULTS.generationCount} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationCount: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label></div>
+            <label className="assistant-consistency-toggle"><input type="checkbox" checked={assistantGenerationNode?.productConsistency !== false} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { productConsistency: event.target.checked })} />保持产品一致（{selectedFile ? '当前选中图片将作为产品参考' : '使用关联原图'}）</label>
+             {assistantGenerationNode?.generationBusy ? <button className="node-cancel-generation" onClick={() => cancelGeneration(assistantGenerationNode)}>取消生图 · {formatGenerationDuration(Date.now() - Number(assistantGenerationNode.generationStartedAt || Date.now()))}</button> : <button className="primary" disabled={!assistantGenerationNode && !selectedFile} onClick={runAssistantGeneration}>{selectedFile ? '按当前图片生成视角预览' : '生成预览'}{assistantGenerationNode?.generationElapsedMs ? ` · 上次 ${formatGenerationDuration(assistantGenerationNode.generationElapsedMs)}` : ''}</button>}
+             <small>也可以输入：16:9，2K，生成2个方案。调整已生成图片的视角请使用图片上方的“多角度”工具。</small>
           </section>
           <div className="chat-list">
             {selectedWorkflowNode && assistantContext && <article className="current-node-card"><header><b>当前节点提示词</b><span className="sync-badge">实时同步</span></header><div className="result-meta"><span>{selectedWorkflowNode.model || aiStatus?.model || '当前模型'}</span><span>{selectedWorkflowNode.templateLabel || assistantTemplate}</span><span>V{assistantVersionCount}</span></div><p>{assistantContext}</p><footer><button onClick={() => navigator.clipboard.writeText(assistantContext)}>复制当前提示词</button></footer></article>}
