@@ -84,6 +84,24 @@ const describeCameraScale = (value) => {
   if (value === 'wide') return '远景：摄像机后退，主体约占画面高度 35%–55%，保留更多环境空间和完整场景关系。'
   return '中景：主体约占画面高度 55%–75%，同时保留适量环境和完整产品结构。'
 }
+const describeAngleEvidence = (node = {}) => {
+  const rotation = clampNumber(node.generationRotate, -180, 180)
+  const tilt = clampNumber(node.generationTilt, -60, 60)
+  const evidence = []
+  if (Math.abs(rotation) >= 75) {
+    const side = rotation < 0 ? '左' : '右'
+    evidence.push(`这是明显的${side}侧大角度换机位，不是轻微旋转或水平翻转；原图正面不能继续正对镜头，正面文字、开口或主立面必须明显变窄并产生强烈侧向透视，${side}侧面、侧壁和遮挡关系必须展开可见，画面消失点与背景透视也要同步偏移`)
+  } else if (Math.abs(rotation) >= 35) {
+    const side = rotation < 0 ? '左' : '右'
+    evidence.push(`这是${side}侧三分之四换机位；主体正面要明显变斜，必须露出对应${side}侧面，不能只改变颜色、光影或做轻微裁切`)
+  } else {
+    evidence.push('水平视角变化较小，但仍要保持主体结构和场景空间真实，不得把角度变化伪装成单纯缩放或裁切')
+  }
+  if (tilt >= 18) evidence.push(`这是高机位俯视，必须明显看到主体顶部、上表面或盒体内侧的深度；地面在画面中的位置和垂直线透视要随镜头升高重新计算`)
+  else if (tilt <= -18) evidence.push(`这是低机位仰视，必须明显看到主体底部、下表面或接地结构；地面接触和垂直线透视要随镜头降低重新计算`)
+  else evidence.push('垂直机位接近平视，不要额外夸大俯视或仰视')
+  return `【目标视角可见证据｜必须满足】角度数值是相对于输入原图当前机位的变化量。${evidence.join('；')}。生成后应一眼看出机位已经移动；如果正面宽度、侧面可见度、顶部可见度和背景消失点几乎没有变化，则视为没有执行目标视角，必须重新构图。`
+}
 const buildMultiAngleInstruction = (node = {}) => {
   if (node.generationMultiAngleEnabled !== true) return ''
   const mode = node.generationAngleMode === 'subject' ? '主体' : '摄像机'
@@ -105,7 +123,7 @@ const buildMultiAngleInstruction = (node = {}) => {
       : '如果原场景包含人物或骑行者，必须保持原图的人物身份、人数、头部朝向、身体重心、四肢骨架、手脚位置、抓握关系、骑行动作、服装和人与产品的相对关系；不得因为换视角而改成另一种姿势、增加或减少肢体、改变人物与产品的接触点。'
   const depthLock = '【空间与遮挡锁定】先判断人物、产品、地面和背景的前后深度，再生成画面；手必须真实握住车把，脚必须真实踩地或与踏板接触，车轮必须落在地面上。禁止手脚、车把、车架、轮胎穿过身体、衣服、地面或彼此重叠成不可能的结构；遮挡边界要自然连续，不能出现肢体断裂、双重车把、悬空车轮或穿模。'
   const extremeNote = extreme ? '这是极端视角变化。即使目标方向需要补全原图看不到的背面，也要优先保持整个人物动作、场景空间和产品结构，允许只对不可见区域做最小必要补全；不得为了补全背面而只重画产品、固定原背景，或重画整个人物。' : ''
-  return `【多角度视角控制｜最高优先级】\n这是同一场景的视角变体生成，不是只修改产品，也不是重新设计产品。控制模式：${mode}。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；目标旋转数值：${signedAngle(rotation)}；目标倾斜数值：${signedAngle(tilt)}；取景距离：${angleScaleLabel(node.generationScale)}。${describeCameraScale(node.generationScale)}${motion}。必须严格执行上述数值对应的目标机位，让人物和产品的可见侧面、背景透视、主体占画面比例、地面接触和遮挡关系发生与目标视角一致的明显变化；不要只改变颜色、产品姿势、背景或轻微裁切。尤其是近景和远景模式，必须先改变镜头距离和主体占画面比例，再处理人物、产品和背景的透视；不要把景别理解成只放大或缩小画布。${sceneLock}${poseLock}${depthLock}${extremeNote}${backsideReference}严格保持产品型号、车架结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、贴花、Logo、颜色、材质和各部件比例完全一致；目标视角看不到的区域按产品参考图和产品结构合理补全，禁止变成其他型号、通用款或新增删减部件。`
+  return `【多角度视角控制｜最高优先级】\n这是同一场景的视角变体生成，不是只修改产品，也不是重新设计产品。控制模式：${mode}。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；目标旋转数值：${signedAngle(rotation)}；目标倾斜数值：${signedAngle(tilt)}；取景距离：${angleScaleLabel(node.generationScale)}。${describeCameraScale(node.generationScale)}${motion}。必须严格执行上述数值对应的目标机位，让人物和产品的可见侧面、背景透视、主体占画面比例、地面接触和遮挡关系发生与目标视角一致的明显变化；不要只改变颜色、产品姿势、背景或轻微裁切。尤其是近景和远景模式，必须先改变镜头距离和主体占画面比例，再处理人物、产品和背景的透视；不要把景别理解成只放大或缩小画布。${describeAngleEvidence(node)}${sceneLock}${poseLock}${depthLock}${extremeNote}${backsideReference}严格保持产品型号、车架结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、贴花、Logo、颜色、材质和各部件比例完全一致；目标视角看不到的区域按产品参考图和产品结构合理补全，禁止变成其他型号、通用款或新增删减部件。`
 }
 const formatGenerationDuration = (milliseconds = 0) => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000))
@@ -192,6 +210,63 @@ async function prepareGenerationReference(dataURL, maxBytes) {
   }
   return output
 }
+
+async function createInpaintMask(dataURL, boxes = []) {
+  const usable = boxes.filter((box) => box && Number(box.width) > 0 && Number(box.height) > 0)
+  if (!usable.length) return null
+  const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = () => reject(new Error('无法为文字区域生成编辑遮罩')); source.src = dataURL })
+  const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+  const context = canvas.getContext('2d'); context.fillStyle = '#000'; context.fillRect(0, 0, canvas.width, canvas.height)
+  context.globalCompositeOperation = 'destination-out'
+  usable.forEach((box) => {
+    const x = Math.max(0, Math.min(1, Number(box.x) || 0)) * canvas.width
+    const y = Math.max(0, Math.min(1, Number(box.y) || 0)) * canvas.height
+    const width = Math.max(1, Math.min(1, Number(box.width) || 0)) * canvas.width
+    const height = Math.max(1, Math.min(1, Number(box.height) || 0)) * canvas.height
+    const padding = Math.max(8, Math.round(Math.min(width, height) * 0.18))
+    context.clearRect(Math.max(0, x - padding), Math.max(0, y - padding), Math.min(canvas.width - Math.max(0, x - padding), width + padding * 2), Math.min(canvas.height - Math.max(0, y - padding), height + padding * 2))
+  })
+  return canvas.toDataURL('image/png')
+}
+
+// 文字编辑是局部操作：生成模型只负责文字框内的替换，框外直接保留原图像素。
+// 这样可以避免模型顺手改变人物、产品、背景或整张图的版式。
+async function compositeMaskedEdit(originalDataURL, generatedDataURL, boxes = []) {
+  const usable = boxes.filter((box) => box && Number(box.width) > 0 && Number(box.height) > 0)
+  const load = (dataURL) => new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('文字编辑结果无法合成')); image.src = dataURL })
+  const [original, generated] = await Promise.all([load(originalDataURL), load(generatedDataURL)])
+  // 最终输出尺寸以原图为准，而不是以接口返回的 2048/4096 图为准。
+  const canvas = document.createElement('canvas'); canvas.width = original.naturalWidth; canvas.height = original.naturalHeight
+  const context = canvas.getContext('2d')
+  if (!usable.length) {
+    context.drawImage(generated, 0, 0, canvas.width, canvas.height)
+  } else {
+    context.drawImage(original, 0, 0, canvas.width, canvas.height)
+    context.save()
+    context.beginPath()
+    usable.forEach((box) => {
+      const x = Math.max(0, Math.min(1, Number(box.x) || 0)) * canvas.width
+      const y = Math.max(0, Math.min(1, Number(box.y) || 0)) * canvas.height
+      const width = Math.max(1, Math.min(1, Number(box.width) || 0)) * canvas.width
+      const height = Math.max(1, Math.min(1, Number(box.height) || 0)) * canvas.height
+      context.rect(x, y, width, height)
+    })
+    context.clip()
+    context.drawImage(generated, 0, 0, canvas.width, canvas.height)
+    context.restore()
+  }
+  return canvas.toDataURL('image/png')
+}
+
+async function imageAspect(dataURL) {
+  const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = () => reject(new Error('无法读取编辑原图尺寸')); source.src = dataURL })
+  return image.naturalWidth / Math.max(1, image.naturalHeight)
+}
+
+const closestGenerationAspect = (ratio) => GENERATION_ASPECTS.reduce((closest, value) => {
+  const [width, height] = value.split(':').map(Number)
+  return Math.abs(width / height - ratio) < Math.abs(closest[0] / closest[1] - ratio) ? [width, height, value] : closest
+}, [16, 9, '16:9'])[2]
 
 async function prepareGenerationReferences(images) {
   const usable = images.filter((image) => image?.dataURL).slice(0, 8)
@@ -359,6 +434,48 @@ function MultiAngleDialog({ value = {}, previewUrl = '', onUse, onClose, disable
   </div>
 }
 
+function QuickEditPopover({ value, onChange, onSubmit, onClose, busy = false, error = '', position, title = '', placeholder = '描述你想修改的内容，例如：把天空改成夕阳，保留人物动作和产品结构…', hint = '只修改你明确点名的一个或两个元素，其他内容会按原图锁定。', submitLabel = '生成' }) {
+  return <section className="quick-edit-popover" style={position} onPointerDown={(event) => event.stopPropagation()}>
+    {title && <b className="quick-edit-title">{title}</b>}
+    <textarea autoFocus value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) onSubmit() }} placeholder={placeholder} disabled={busy} />
+    <div className="quick-edit-hint">{hint}</div>
+    {error && <p className="quick-edit-error">{error}</p>}
+    <footer><button type="button" onClick={onClose} disabled={busy}>取消</button><button type="button" className="primary" onClick={onSubmit} disabled={busy || !value.trim()}>{busy ? '正在生成局部编辑…' : submitLabel}</button></footer>
+  </section>
+}
+
+const parseRecognizedText = (raw) => {
+  const cleaned = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  let parsed = null
+  try { parsed = JSON.parse(cleaned) } catch {
+    const start = Math.min(...[cleaned.indexOf('{'), cleaned.indexOf('[')].filter((value) => value >= 0))
+    const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'))
+    if (Number.isFinite(start) && start >= 0 && end > start) { try { parsed = JSON.parse(cleaned.slice(start, end + 1)) } catch {} }
+  }
+  const values = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.texts) ? parsed.texts : [])
+  const normalized = values.map((item, index) => {
+    const text = typeof item === 'string' ? item : item?.text
+    if (!text || !String(text).trim()) return null
+    const rawBox = item?.box || item?.bbox || item?.boundingBox
+    const values = Array.isArray(rawBox) ? rawBox : [rawBox?.x, rawBox?.y, rawBox?.width, rawBox?.height]
+    const box = values.length === 4 && values.every((value) => Number.isFinite(Number(value))) ? { x: Math.max(0, Math.min(1, Number(values[0]))), y: Math.max(0, Math.min(1, Number(values[1]))), width: Math.max(0, Math.min(1, Number(values[2]))), height: Math.max(0, Math.min(1, Number(values[3]))) } : null
+    return { id: uid(), original: String(text).trim(), value: String(text).trim(), box, location: item?.location || `文字区域 ${index + 1}`, style: item?.style || '' }
+  }).filter(Boolean)
+  if (normalized.length) return normalized
+  return cleaned.split(/\r?\n/).map((line) => line.replace(/^[-*\d.、]+\s*/, '').trim()).filter((line) => line && !/^识别|^图片中|^没有/.test(line)).map((text, index) => ({ id: uid(), original: text, value: text, box: null, location: `文字区域 ${index + 1}`, style: '' }))
+}
+
+function TextEditDialog({ items, onChange, onGenerate, onClose, busy = false, error = '', recognizing = false }) {
+  return <div className="text-edit-backdrop" onMouseDown={() => !busy && onClose()}>
+    <section className="text-edit-dialog" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><small>TEXT EDIT</small><h2>{recognizing ? '正在识别图片文字…' : '识别图片文字'}</h2></div><button type="button" onClick={onClose} disabled={busy}>×</button></header>
+      {recognizing ? <div className="text-edit-loading">AI 正在读取图片中的标题、参数、卖点和其他可见文字，请稍候…</div> : items.length ? <><p className="text-edit-description">已识别到 {items.length} 处文字。只修改你需要替换的内容，位置、字体、颜色、透视和其他画面会保持不变。</p><div className="text-edit-list">{items.map((item, index) => <label key={item.id}><span>文字 {index + 1}<small>{item.location}{item.style ? ` · ${item.style}` : ''}</small></span><textarea value={item.value} onChange={(event) => onChange(item.id, event.target.value)} disabled={busy} /></label>)}</div></> : <div className="text-edit-empty">没有识别到清晰文字。请关闭窗口后换一张更清晰的图片重试。</div>}
+      {error && <p className="text-edit-error">{error}</p>}
+      <footer><button type="button" onClick={onClose} disabled={busy}>取消</button><button type="button" className="primary" onClick={onGenerate} disabled={busy || recognizing || !items.some((item) => item.value.trim() && item.value.trim() !== item.original.trim())}>{busy ? '正在生成文字修改…' : '生成修改结果'}</button></footer>
+    </section>
+  </div>
+}
+
 function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
   const generationGuardUntil = useRef(0)
@@ -500,6 +617,17 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [selected, setSelected] = useState(null)
   const [multiAngleOpen, setMultiAngleOpen] = useState(false)
+  const [multiAnglePreparing, setMultiAnglePreparing] = useState(false)
+  const [quickEditOpen, setQuickEditOpen] = useState(false)
+  const [quickEditText, setQuickEditText] = useState('')
+  const [quickEditBusy, setQuickEditBusy] = useState(false)
+  const [quickEditError, setQuickEditError] = useState('')
+  const [textEditOpen, setTextEditOpen] = useState(false)
+  const [textEditText, setTextEditText] = useState('')
+  const [textEditItems, setTextEditItems] = useState([])
+  const [textEditRecognizing, setTextEditRecognizing] = useState(false)
+  const [textEditBusy, setTextEditBusy] = useState(false)
+  const [textEditError, setTextEditError] = useState('')
   const [aiStatus, setAiStatus] = useState(null)
   const [reverseBusy, setReverseBusy] = useState(false)
   const [reversePrompt, setReversePrompt] = useState('')
@@ -1353,10 +1481,21 @@ function App() {
     ? workflowNodes.find((node) => node.id === selected.customData.promptNodeId) || null
     : null
   const assistantGenerationNode = selectedWorkflowNode || selectedImageNode
-  const ensureAssistantGenerationNode = () => {
+  const ensureAssistantGenerationNode = (options = {}) => {
+    // 图片工具栏上的“多角度”针对的是当前图片本身。若这张图片同时挂着
+    // “提示词修改”节点，不能把修改结果当成原图提示词再次生成。
+    if (options.preferOriginalImage && selected?.type === 'image') {
+      const sourceNode = selectedImageNode || selectedWorkflowNode
+      const originalPrompt = sourceNode?.kind === 'modify'
+        ? (sourceNode.prompt || selected?.customData?.prompt || '')
+        : (selected?.customData?.prompt || sourceNode?.prompt || '')
+      if (sourceNode && originalPrompt.trim()) return { ...sourceNode, kind: 'prompt', prompt: originalPrompt.trim(), output: '', instruction: '' }
+    }
     if (assistantGenerationNode) return assistantGenerationNode
     if (!selectedFile?.dataURL || selected?.type !== 'image') return null
-    const prompt = selected?.customData?.prompt || selected?.customData?.generation?.effectivePrompt || reversePrompt
+    // 图片工具栏的多角度不能误用提示词助手里上一张图的反推结果。
+    // 只有图片自身携带的提示词元数据才属于当前图片；纯图片交给多角度专用上下文处理。
+    const prompt = selected?.customData?.prompt || selected?.customData?.generation?.effectivePrompt || (options.preferOriginalImage ? '' : reversePrompt)
     if (!prompt?.trim()) return null
     const generation = selected?.customData?.generation || {}
     const nodeId = addPromptNode(prompt, generation.model || imageService.model || aiStatus?.model || '当前模型', 'reverse', selected, null)
@@ -1364,24 +1503,148 @@ function App() {
     if (node) setSelectedNodeIds([node.id])
     return node
   }
-  const openMultiAngleForSelection = () => {
-    const node = ensureAssistantGenerationNode()
-    if (!node) { alert('这张图片没有关联提示词，请先反推提示词后再调整视角。'); return }
-    setMultiAngleOpen(true)
+  const resolveMultiAngleNode = async () => {
+    const existing = ensureAssistantGenerationNode({ preferOriginalImage: true })
+    if (existing || !selectedFile?.dataURL || selected?.type !== 'image') return existing
+    setMultiAnglePreparing(true)
+    try {
+      // 直接拖入画布的图片不反推整段提示词。这里仅建立一个本地占位节点，
+      // 真正提交时把原图和 buildMultiAngleInstruction 生成的角度指令直接送入图生图接口。
+      const prompt = '同一张输入图片的视角变体；原图中的人物、产品、动作、结构、背景、光线和空间关系都是事实，只改变后续指定的摄像机位置、透视和取景。'
+      const nodeId = addPromptNode(prompt, imageService.model || aiStatus?.model || '当前图像模型', 'reverse', selected, { id: 'image-angle', label: '原图多角度编辑' })
+      const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
+      if (node) setSelectedNodeIds([node.id])
+      return node
+    } finally {
+      setMultiAnglePreparing(false)
+    }
+  }
+  const openMultiAngleForSelection = async () => {
+    if (multiAnglePreparing) return
+    try {
+      const node = await resolveMultiAngleNode()
+      if (!node) { alert('这张图片没有关联提示词，无法建立视角变体。'); return }
+      setMultiAngleOpen(true)
+    } catch (error) {
+      alert(`读取原图提示词失败：${errorMessage(error, '请检查 AI 配置后重试')}`)
+    }
+  }
+  const openQuickEditForSelection = () => {
+    if (!selectedFile?.dataURL || selected?.type !== 'image') return alert('请先选择一张图片。')
+    setQuickEditText('')
+    setQuickEditError('')
+    setQuickEditOpen(true)
+  }
+  const openTextEditForSelection = () => {
+    if (!selectedFile?.dataURL || selected?.type !== 'image') return alert('请先选择一张图片。')
+    setTextEditText('')
+    setTextEditItems([])
+    setTextEditRecognizing(true)
+    setTextEditError('')
+    setTextEditOpen(true)
+    void recognizeTextForSelection()
+  }
+  const recognizeTextForSelection = async () => {
+    if (!selectedFile?.dataURL || selected?.type !== 'image') return
+    setTextEditRecognizing(true)
+    setTextEditBusy(true)
+    setTextEditError('')
+    try {
+      const result = await invoke('extract_image_text', { imageDataUrl: await compressForVision(selectedFile.dataURL) })
+      const items = parseRecognizedText(result.text || '')
+      setTextEditItems(items)
+      if (!items.length) setTextEditError('没有识别到清晰文字，请换一张更清晰的图片重试。')
+    } catch (error) {
+      setTextEditError(errorMessage(error, '文字识别失败，请重试。'))
+    } finally {
+      setTextEditRecognizing(false)
+      setTextEditBusy(false)
+    }
+  }
+  const runQuickEdit = async () => {
+    if (quickEditBusy || !quickEditText.trim() || !selectedFile?.dataURL || selected?.type !== 'image') return
+    setQuickEditBusy(true)
+    setQuickEditError('')
+    try {
+      const imageDataUrl = await compressForVision(selectedFile.dataURL)
+      let node = assistantGenerationNode
+      let basePrompt = selected?.customData?.prompt || (node ? (node.kind === 'modify' ? (node.output || node.prompt) : node.prompt) : reversePrompt || '')
+      let baseModel = node?.model || selected?.customData?.generation?.model || aiStatus?.model || '当前模型'
+      const templateId = node?.templateId || selectedTemplateId || null
+      if (!basePrompt.trim()) {
+        const reversed = await invoke('reverse_image_prompt', { imageDataUrl, templateId })
+        basePrompt = reversed.prompt || ''
+        baseModel = reversed.model || baseModel
+      }
+      if (!basePrompt.trim()) throw new Error('无法从当前图片得到基础提示词，请先反推提示词后再试。')
+      if (!node) {
+        const nodeId = addPromptNode(basePrompt, baseModel, 'reverse', selected, null)
+        node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
+        if (!node) throw new Error('快速编辑节点创建失败，请重试。')
+        setSelectedNodeIds([node.id])
+      }
+      const editInstruction = `【局部编辑】只修改用户明确点名的区域或对象，未点名的内容必须保持原图不变。用户编辑要求：${quickEditText.trim()}`
+      const currentMessages = [...chatMessages, { id: uid(), role: 'user', text: `快速编辑：${quickEditText.trim()}`, source: 'quick-edit', createdAt: Date.now(), nodeId: node.id }, { id: uid(), role: 'assistant', text: editInstruction, model: baseModel, isPrompt: true, source: 'quick-edit', linkedToNode: false, templateLabel: '局部编辑指令', createdAt: Date.now(), nodeId: node.id }]
+      saveChat(currentMessages)
+      setQuickEditOpen(false)
+      await generateAssistantPreview(node, null, { mode: 'quick-edit', editInstruction })
+    } catch (error) {
+      setQuickEditError(errorMessage(error, '快速编辑失败，请重试。'))
+    } finally { setQuickEditBusy(false) }
+  }
+  const runTextEdit = async () => {
+    const changes = textEditItems.filter((item) => item.value.trim() && item.value.trim() !== item.original.trim())
+    if (textEditBusy || !changes.length || !selectedFile?.dataURL || selected?.type !== 'image') return
+    const editRequest = changes.map((item, index) => {
+      const box = item.box ? `；图像相对位置：左${Math.round(item.box.x * 100)}%、上${Math.round(item.box.y * 100)}%、宽${Math.round(item.box.width * 100)}%、高${Math.round(item.box.height * 100)}%` : ''
+      return `文字${index + 1}：将“${item.original}”改为“${item.value.trim()}”；位置：${item.location}${box}${item.style ? `；样式：${item.style}` : ''}`
+    }).join('\n')
+    setTextEditBusy(true)
+    setTextEditError('')
+    try {
+      const imageDataUrl = await compressForVision(selectedFile.dataURL)
+      let node = assistantGenerationNode
+      let basePrompt = selected?.customData?.prompt || (node ? (node.kind === 'modify' ? (node.output || node.prompt) : node.prompt) : reversePrompt || '')
+      let baseModel = node?.model || selected?.customData?.generation?.model || aiStatus?.model || '当前模型'
+      const templateId = node?.templateId || selectedTemplateId || null
+      if (!basePrompt.trim()) {
+        const reversed = await invoke('reverse_image_prompt', { imageDataUrl, templateId })
+        basePrompt = reversed.prompt || ''
+        baseModel = reversed.model || baseModel
+      }
+      if (!basePrompt.trim()) throw new Error('无法从当前图片得到基础提示词，请先反推提示词后再试。')
+      if (!node) {
+        const nodeId = addPromptNode(basePrompt, baseModel, 'reverse', selected, null)
+        node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
+        if (!node) throw new Error('文字编辑节点创建失败，请重试。')
+        setSelectedNodeIds([node.id])
+      }
+       const editInstruction = `【文字局部编辑】只把下面列出的原文字替换成目标文字：\n${editRequest}\n【文字框几何锁定】每段文字的左上角、右下角、占用宽高、行数、基线和对齐方式必须与原图完全一致，目标文字必须完整落在同一个原文字框内；禁止因为目标文字变长而放大字号、扩大文字框、改变换行或挤压周围内容，必要时只在原文字框内部压缩字距或字宽。保持原来的字体风格、字号、颜色、透视、遮挡、边缘和光照关系。文字框以外的像素必须保持原图不变；禁止修改人物动作、产品结构、背景、天空、地面、构图、光线或其他未列出的内容。不要重排版，不要新增文字，不要删除其他文字。`
+      const currentMessages = [...chatMessages, { id: uid(), role: 'user', text: `编辑文字：${editRequest}`, source: 'text-edit', createdAt: Date.now(), nodeId: node.id }, { id: uid(), role: 'assistant', text: editInstruction, model: baseModel, isPrompt: true, source: 'text-edit', linkedToNode: false, templateLabel: '文字局部编辑指令', createdAt: Date.now(), nodeId: node.id }]
+      saveChat(currentMessages)
+      setTextEditOpen(false)
+       await generateAssistantPreview(node, null, { mode: 'quick-edit', editInstruction, editMaskBoxes: changes.map((item) => item.box).filter(Boolean), preserveSourceDimensions: true })
+    } catch (error) {
+      setTextEditError(errorMessage(error, '文字编辑失败，请重试。'))
+    } finally { setTextEditBusy(false) }
   }
   const applyMultiAngleAndGenerate = async (draft) => {
-    const node = ensureAssistantGenerationNode()
-    if (!node) { alert('这张图片没有关联提示词，请先反推提示词后再调整视角。'); return }
-    // 直接把对话框草稿传给生成函数，避免先 setState 再读取旧节点导致“点击后没有反应”。
-    const nextNode = { ...node, ...draft, generationMultiAngleEnabled: true }
-    updateWorkflowNode(node.id, draft)
-    setMultiAngleOpen(false)
-    await generateAssistantPreview(nextNode)
+    try {
+      const node = await resolveMultiAngleNode()
+      if (!node) { alert('这张图片没有关联提示词，无法建立视角变体。'); return }
+      // 直接把对话框草稿传给生成函数，避免先 setState 再读取旧节点导致“点击后没有反应”。
+      const nextNode = { ...node, ...draft, generationMultiAngleEnabled: true }
+      updateWorkflowNode(node.id, draft)
+      setMultiAngleOpen(false)
+      await generateAssistantPreview(nextNode, null, { mode: 'multi-angle' })
+    } catch (error) {
+      alert(`准备多角度生成失败：${errorMessage(error, '请重试')}`)
+    }
   }
   const runAssistantGeneration = async () => {
     const node = ensureAssistantGenerationNode()
     if (!node) { alert('请先选中一张已有生图，或选择一个提示词节点。'); return }
-    await generateAssistantPreview(node)
+    await generateAssistantPreview(node, null, { mode: 'normal' })
   }
   const selectedImageGeneration = selected?.customData?.generation || {}
   const assistantGenerationValue = assistantGenerationNode || {
@@ -1396,7 +1659,6 @@ function App() {
   const assistantContextTitle = selectedWorkflowNode ? `${selectedWorkflowNode.kind === 'modify' ? '提示词修改' : selectedWorkflowNode.kind === 'compose' ? '组合生图' : selectedWorkflowNode.kind === 'skill' ? (selectedWorkflowNode.skillName || 'Skill') : '提示词反推'}节点` : canComposeGeneration ? '已选提示词与产品图' : selectedFile ? '已选图片' : '未选择内容'
   const assistantTemplate = selectedWorkflowNode?.templateLabel || aiStatus?.promptTemplates?.find((item) => item.id === selectedTemplateId)?.label || '当前默认模板'
   const assistantVersionCount = selectedWorkflowNode ? (selectedWorkflowNode.versionHistory?.length || 0) + 1 : 0
-  const assistantQuickActions = ['分析当前图片', '反推提示词', '优化当前提示词', '比较提示词版本']
   const skillContext = {
     image: Boolean(selectedFile || selectedProductReferences.length),
     text: Boolean((selectedCanvasPrompt || assistantContext || '').trim()),
@@ -1550,8 +1812,11 @@ function App() {
     updateWorkflowNode(node.id, { generationBusy: false, generationStatus: `已取消 · 已完成 ${current.generationCompletedCount || 0}/${current.generationCount || 1}`, generationTaskId: null, generationTaskIds: [], generationFinishedAt: finishedAt, generationElapsedMs: Math.max(0, finishedAt - Number(current.generationStartedAt || finishedAt)), generationError: '' })
     await Promise.all(taskIds.map((taskId) => invoke('cancel_generation', { taskId }).catch((error) => console.warn(`服务端任务 ${taskId} 取消未确认，已停止本地等待`, error))))
   }
-  const generateAssistantPreview = async (node, promptOverride = null) => {
+  const generateAssistantPreview = async (node, promptOverride = null, options = {}) => {
     if (!node) return
+    const multiAngleRun = options.mode === 'multi-angle'
+    const quickEditRun = options.mode === 'quick-edit'
+    const localEditInstruction = options.editInstruction?.trim() || ''
     // 视角变体时，当前选中的已生成场景图是“编辑底图”，不是产品参考图。
     // 只有白底/产品参考图进入 referenceImages，避免模型把整张旧场景锁死。
     const selectedCanvasImage = selectedFile?.dataURL ? {
@@ -1562,23 +1827,29 @@ function App() {
       role: '仅用于保持场景、光线和构图的编辑底图',
     } : null
     const existingReferences = (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
-    const editingExistingGeneratedScene = Boolean(selectedImageNode && selectedCanvasImage)
-    const referenceImages = editingExistingGeneratedScene
+    const selectedGeneratedScene = Boolean(selectedImageNode && selectedCanvasImage)
+    // 多角度是对画布上当前图片做视角变体。无论图片是刚拖入的原图，还是已经
+    // 生成过的场景图，都要作为编辑底图发送；不能把纯图片误当成产品参考图。
+    const selectedImageAsEdit = Boolean(selectedCanvasImage && (quickEditRun || multiAngleRun))
+    const referenceImages = selectedImageAsEdit
       ? existingReferences
+      : selectedGeneratedScene
+        ? existingReferences
       : selectedCanvasImage
         ? [selectedCanvasImage, ...existingReferences.filter((image) => image.dataURL !== selectedCanvasImage.dataURL)].slice(0, 8)
         : existingReferences
     const previewNode = {
       ...node,
-      ...(promptOverride ? { prompt: promptOverride, output: promptOverride } : {}),
+      ...(promptOverride && !localEditInstruction ? { prompt: promptOverride, output: promptOverride } : {}),
       referenceImages,
       referenceImage: null,
-      generationEditImage: editingExistingGeneratedScene ? selectedCanvasImage : null,
-      productConsistency: editingExistingGeneratedScene ? (existingReferences.length ? true : node.productConsistency) : (selectedCanvasImage ? true : node.productConsistency),
+      generationEditImage: selectedImageAsEdit ? selectedCanvasImage : null,
+      generationEditMaskBoxes: options.editMaskBoxes || node.generationEditMaskBoxes || null,
+      productConsistency: selectedImageAsEdit ? (existingReferences.length ? true : node.productConsistency) : (selectedCanvasImage ? true : node.productConsistency),
     }
     // 节点本身仍保存产品参考图；已生成场景底图只存在于本次请求中。
-    if (selectedCanvasImage && !editingExistingGeneratedScene) updateWorkflowNode(node.id, { referenceImages, referenceImage: null, productConsistency: true })
-    await generatePreview(previewNode)
+    if (selectedCanvasImage && !selectedImageAsEdit) updateWorkflowNode(node.id, { referenceImages, referenceImage: null, productConsistency: true })
+    await generatePreview(previewNode, { mode: multiAngleRun ? 'multi-angle' : quickEditRun ? 'quick-edit' : 'normal', editInstruction: localEditInstruction, editMaskBoxes: options.editMaskBoxes || null, preserveSourceDimensions: options.preserveSourceDimensions === true })
   }
   const generateAssistantMessagePreview = async (message) => {
     let node = selectedWorkflowNode
@@ -1589,16 +1860,25 @@ function App() {
       if (!node) return
       setSelectedNodeIds([node.id])
     }
-    await generateAssistantPreview(node, message.text)
+    await generateAssistantPreview(node, message.text, { mode: 'normal' })
   }
-  const generatePreview = async (node) => {
+  const generatePreview = async (node, options = {}) => {
     if ((sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)?.generationBusy) return
-    const basePrompt = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt; if (!basePrompt?.trim()) return
-    const keepProduct = node.productConsistency !== false
-    const multiAngleInstruction = buildMultiAngleInstruction(node)
-      const prompt = [keepProduct ? PRODUCT_CONSISTENCY_INSTRUCTION : '', basePrompt, multiAngleInstruction].filter(Boolean).join('\n\n')
-      const quality = node.generationQuality || GENERATION_DEFAULTS.generationQuality, aspect = node.generationAspect || GENERATION_DEFAULTS.generationAspect
-      const count = Math.max(1, Math.min(4, Number(node.generationCount || GENERATION_DEFAULTS.generationCount))), requestedSize = GENERATION_SIZES[quality]?.[aspect] || '2048x1152', size = GENERATION_COMPATIBLE_SIZES[aspect] || '1792x1024'
+    const multiAngleRun = options.mode === 'multi-angle'
+    const quickEditRun = options.mode === 'quick-edit'
+    const editInstruction = options.editInstruction?.trim() || ''
+    const preserveSourceDimensions = options.preserveSourceDimensions === true
+    // 多角度状态保存在节点上，便于下次打开时继续编辑；但普通“生成预览”
+    // 必须使用原提示词，不能把上一次的角度指令、背面图或场景底图带进去。
+    const generationNode = (multiAngleRun || quickEditRun)
+      ? node
+      : { ...node, generationMultiAngleEnabled: false, generationBacksideReference: null, generationEditImage: null, generationEditMaskBoxes: null }
+    const basePrompt = generationNode.kind === 'modify' ? (generationNode.output || generationNode.prompt) : generationNode.prompt; if (!basePrompt?.trim()) return
+    const keepProduct = generationNode.productConsistency !== false
+    const multiAngleInstruction = multiAngleRun ? buildMultiAngleInstruction(generationNode) : ''
+      const prompt = [keepProduct ? PRODUCT_CONSISTENCY_INSTRUCTION : '', basePrompt, editInstruction, multiAngleInstruction].filter(Boolean).join('\n\n')
+      const quality = generationNode.generationQuality || GENERATION_DEFAULTS.generationQuality, aspect = generationNode.generationAspect || GENERATION_DEFAULTS.generationAspect
+      const count = Math.max(1, Math.min(4, Number(generationNode.generationCount || GENERATION_DEFAULTS.generationCount))), requestedSize = GENERATION_SIZES[quality]?.[aspect] || '2048x1152', size = GENERATION_COMPATIBLE_SIZES[aspect] || '1792x1024'
     const generationModel = generationModelFor(imageService.model, quality)
     const runId = uid(), startedAt = Date.now()
     generationRunsRef.current.set(node.id, runId)
@@ -1611,40 +1891,52 @@ function App() {
       // A reference explicitly attached to a node is always a product reference,
       // including ordinary prompt nodes started from the assistant.  Previously
       // prompt nodes silently discarded it and fell back to their source scene.
-      const replacementReferences = (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
-      const backsideReference = node.generationBacksideReference?.dataURL ? node.generationBacksideReference : null
+      const replacementReferences = (generationNode.referenceImages?.length ? generationNode.referenceImages : (generationNode.referenceImage ? [generationNode.referenceImage] : [])).filter((image) => image?.dataURL)
+      const backsideReference = multiAngleRun && generationNode.generationBacksideReference?.dataURL ? generationNode.generationBacksideReference : null
       const requestProductReferences = replacementReferences.slice(0, backsideReference ? 7 : 8)
       const replacementReference = replacementReferences[0] || null
-      const sourceImage = sourceFileForNode(node)
-      const explicitEditImage = node.generationEditImage?.dataURL ? node.generationEditImage : null
+      const sourceImage = sourceFileForNode(generationNode)
+      const explicitEditImage = (multiAngleRun || quickEditRun) && generationNode.generationEditImage?.dataURL ? generationNode.generationEditImage : null
       const editImage = explicitEditImage || replacementReference || (keepProduct ? sourceImage : null)
-      if (node.kind === 'modify' && !replacementReference) throw new Error('请添加产品参考图；生成不会使用原场景图')
+      if (generationNode.kind === 'modify' && !replacementReference && !quickEditRun) throw new Error('请添加产品参考图；生成不会使用原场景图')
       const referenceRoles = requestProductReferences.map((item, index) => `产品参考图${index + 1}用途：${item.role || '产品外观'}`).join('；')
       const backsideReferenceRole = backsideReference ? '【背面参考图已上传】本次请求的最后一张参考图就是当前产品的背面/另一面。请把它视为同一型号的结构事实，用来补全目标视角中可见的背面，不得把它当成另一款产品或场景风格参考。' : ''
       const editRole = explicitEditImage
-        ? node.generationMultiAngleEnabled === true
+        ? multiAngleRun
           ? '当前选中的第一张输入图是同一场景的编辑底图，用于识别人物、产品、背景、光线和真实空间关系；它不是要锁死的原构图。摄像机模式下必须对整张场景重新构图，让人物、产品和背景一起随目标机位改变；若开启人物动作锁定，人物只允许改变投影、可见侧面和遮挡，不得重新摆姿势或把原人物贴回原背景位置。'
-          : '当前选中的第一张输入图是场景编辑底图，用于保持人物、环境、光线和整体氛围；不要把场景中的原有产品当成产品结构参考。'
+          : '当前选中的第一张输入图是本次快速编辑的原图底稿。只执行用户明确提出的编辑，不要重新设计未提及的主体、人物动作、产品结构、场景、构图、光线和画面比例；不要把原图当成新的产品型号参考。'
         : ''
-      const finalAnglePriority = node.generationMultiAngleEnabled === true ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；${describeCameraScale(node.generationScale)}如果原图是中远景而目标是近景，输出必须明显收紧取景，让产品成为画面主体。` : ''
+      const finalAnglePriority = multiAngleRun ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(generationNode.generationRotate)}；目标垂直机位：${describeCameraTilt(generationNode.generationTilt)}；${describeCameraScale(generationNode.generationScale)}${describeAngleEvidence(generationNode)}如果原图是中远景而目标是近景，输出必须明显收紧取景，让产品成为画面主体。` : ''
+      const quickEditPriority = quickEditRun ? '【快速编辑最高优先级：原图局部编辑】这是在当前图片上做局部修改，不是重新生成一张新图。上面的局部编辑指令是唯一需要改变的内容，不需要再次改写或扩展成完整场景提示词；只允许改变用户明确点名的区域或对象。未提及的主体身份、人物动作、产品结构、背景、天空以外的环境、构图、镜头、光线方向、文字和画面比例全部锁定，必须与原图保持一致。若用户只修改天空，就只编辑天空及其自然反射，严禁重做人物、产品、地面和背景；禁止额外发挥、换场景、改动作或改变取景。' : ''
       const generationPrompt = [
         prompt,
         editRole,
         referenceRoles ? `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
         backsideReferenceRole,
-        explicitEditImage ? `【视角变体最终覆盖指令】必须实际改变摄像机位置，并让人物、产品、背景透视和遮挡关系同步改变；不能只复用原图构图，也不能只翻转产品。原提示词中关于旧视角、旧机位、旧景别和旧构图的描述仅作为场景事实，不得覆盖当前目标角度。${node.generationActionLock !== false ? '人物当前动作是锁定项，只能重新投影，不能改动作。' : ''}` : '',
+        multiAngleRun && explicitEditImage ? `【视角变体最终覆盖指令】必须实际改变摄像机位置，并让人物、产品、背景透视和遮挡关系同步改变；不能只复用原图构图，也不能只翻转产品。原提示词中关于旧视角、旧机位、旧景别和旧构图的描述仅作为场景事实，不得覆盖当前目标角度。${generationNode.generationActionLock !== false ? '人物当前动作是锁定项，只能重新投影，不能改动作。' : ''}` : '',
         finalAnglePriority,
+        quickEditPriority,
       ].filter(Boolean).join('\n\n')
       const productReferenceImages = requestProductReferences.length ? await prepareGenerationReferences(requestProductReferences) : []
       const backsideReferenceDataUrl = backsideReference ? await prepareGenerationReference(backsideReference.dataURL, 700 * 1024) : null
       const editImageDataUrl = editImage ? await prepareGenerationReference(editImage.dataURL, 700 * 1024) : null
+      const editMaskBoxes = quickEditRun ? (options.editMaskBoxes || generationNode.generationEditMaskBoxes || []).filter(Boolean) : []
+      const editMaskDataUrl = editImageDataUrl && editMaskBoxes.length ? await createInpaintMask(editImageDataUrl, editMaskBoxes) : null
+      let requestAspect = aspect
+      let requestSize = size
+      let requestRequestedSize = requestedSize
+      if (quickEditRun && editImage?.dataURL) {
+        requestAspect = closestGenerationAspect(await imageAspect(editImage.dataURL))
+        requestSize = GENERATION_COMPATIBLE_SIZES[requestAspect] || size
+        requestRequestedSize = GENERATION_SIZES[quality]?.[requestAspect] || requestedSize
+      }
       const requestReferenceImages = explicitEditImage
         ? [editImageDataUrl, ...productReferenceImages, backsideReferenceDataUrl].filter(Boolean).slice(0, 8)
         : productReferenceImages.length ? [...productReferenceImages, backsideReferenceDataUrl].filter(Boolean).slice(0, 8) : [editImageDataUrl, backsideReferenceDataUrl].filter(Boolean).slice(0, 8)
       ensureActive()
       const preparationMs = Date.now() - startedAt
       if (replacementReference) updateActive({ generationStatus: `正在锁定${node.kind === 'compose' ? `${replacementReferences.length} 张产品参考图` : `产品参考图“${replacementReference.name || replacementReference.role || '当前选中产品'}”`}生成` })
-      else if (explicitEditImage) updateActive({ generationStatus: '正在以当前生成场景为编辑底图，准备生成目标视角…' })
+      else if (explicitEditImage) updateActive({ generationStatus: quickEditRun ? '正在以当前图片为编辑底图，准备生成快速编辑结果…' : '正在以当前生成场景为编辑底图，准备生成目标视角…' })
       let submittedCount = 0, completedCount = 0, failedCount = 0, nextIndex = 0
       const failureDetails = []
       const taskIds = new Set(), taskTimings = []
@@ -1658,7 +1950,7 @@ function App() {
         try {
           updateActive({ generationStatus: `正在提交 ${submittedCount + 1}/${count} · 已完成 ${completedCount}/${count}` })
           const submitStartedAt = Date.now()
-          let task = await invoke('submit_generation', { request: { prompt: generationPrompt, size, aspectRatio: aspect, imageSize: quality, model: generationModel, imageDataUrl: editImageDataUrl, referenceImages: requestReferenceImages } })
+           let task = await invoke('submit_generation', { request: { prompt: generationPrompt, size: requestSize, requestedSize: requestRequestedSize, aspectRatio: requestAspect, imageSize: quality, model: generationModel, imageDataUrl: editImageDataUrl, maskDataUrl: editMaskDataUrl, referenceImages: requestReferenceImages } })
           const submittedAt = Date.now()
           taskId = task.taskId || null
           if (!active()) { if (taskId) invoke('cancel_generation', { taskId }).catch(() => {}); throw cancelError() }
@@ -1678,7 +1970,9 @@ function App() {
           updateActive({ generationStatus: `正在下载第 ${resultIndex + 1}/${count} 张 · 已完成 ${completedCount}/${count}` })
           const downloaded = await invoke('download_generation_result', { source: task.imageUrl })
           ensureActive()
-           await addGeneratedImage(downloaded.dataUrl, node, { taskId, model: generationModel, effectivePrompt: generationPrompt, resultIndex, requestedSize, aspect, quality, sourceUrl: task.imageUrl, multiAngle: node.generationMultiAngleEnabled === true, angleMode: node.generationAngleMode || 'camera', rotate: Number(node.generationRotate || 0), tilt: Number(node.generationTilt || 0), scale: node.generationScale || 'medium', backsideReference: Boolean(backsideReference) })
+           let generatedDataUrl = downloaded.dataUrl
+           if (preserveSourceDimensions && editImage?.dataURL) generatedDataUrl = await compositeMaskedEdit(editImage.dataURL, generatedDataUrl, editMaskBoxes)
+           await addGeneratedImage(generatedDataUrl, generationNode, { taskId, model: generationModel, effectivePrompt: generationPrompt, resultIndex, requestedSize: requestRequestedSize, aspect: requestAspect, quality, sourceUrl: task.imageUrl, multiAngle: multiAngleRun, quickEdit: quickEditRun, editMask: Boolean(editMaskDataUrl), preservedSourceDimensions: preserveSourceDimensions, angleMode: multiAngleRun ? (generationNode.generationAngleMode || 'camera') : 'camera', rotate: multiAngleRun ? Number(generationNode.generationRotate || 0) : 0, tilt: multiAngleRun ? Number(generationNode.generationTilt || 0) : 0, scale: multiAngleRun ? (generationNode.generationScale || 'medium') : 'medium', backsideReference: multiAngleRun && Boolean(backsideReference) })
           const finishedImageAt = Date.now()
           taskTimings.push({ submitMs: submittedAt - submitStartedAt, serverMs: downloadStartedAt - submittedAt, downloadMs: finishedImageAt - downloadStartedAt })
           completedCount += 1
@@ -1733,6 +2027,7 @@ function App() {
     } catch (error) { alert(`原图下载失败：${errorMessage(error)}`) }
   }
   const selectedImageToolbarPosition = selected?.type === 'image' ? { left: Math.max(12, (selected.x + (viewport.scrollX || 0)) * (viewport.zoom || 1)), top: Math.max(54, (selected.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48) } : null
+  const quickEditPosition = selectedImageToolbarPosition ? { left: Math.max(12, Math.min(selectedImageToolbarPosition.left, Math.max(12, (boardRef.current?.clientWidth || 720) - 560))), top: selectedImageToolbarPosition.top + 54 } : null
   const openPromptVault = () => {
     // 切换立即发生；大场景保存移到浏览器空闲时段，避免阻塞按钮反馈。
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, sceneRef.current.workflowNodes || [])
@@ -1783,7 +2078,7 @@ function App() {
 
   return <div className={`app ${canvasTheme === 'light' ? 'light-theme' : ''}`}>
     <header className="bar"><b>阿男帮你推</b><nav className="mode-switch"><button className={mode === 'canvas' ? 'active' : ''} onClick={() => setMode('canvas')}>灵感空间</button><button className={mode === 'prompts' ? 'active' : ''} onClick={openPromptVault}>提示词库</button></nav>{mode === 'canvas' && <><span /><button className={appUpdate ? 'app-update-ready' : ''} disabled={updateChecking} onClick={appUpdate ? () => setUpdateDialogOpen(true) : checkAppUpdate}>{updateChecking ? '检查中…' : appUpdate ? `可更新 ${appUpdate.version}` : '检查更新'}</button><button onClick={() => setDetailOpen((value) => !value)}>{detailOpen ? '收起侧栏' : '展开侧栏'}</button><button onClick={() => input.current?.click()}>导入图片</button><input ref={input} hidden type="file" multiple accept="image/*" onChange={(event) => importFiles(event.target.files)} /></>}</header>
-    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 1.2.0{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
+    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 1.3.6{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
     {vaultLoaded && <iframe className={`vault-frame ${mode === 'prompts' ? 'active' : ''}`} title="提示词库" src="/prompt-vault.html" />}
     <main className={`${detailOpen ? '' : 'right-closed'} ${mode === 'prompts' ? 'canvas-hidden' : ''}`}>
       <aside className={`projects ${drawerOpen ? '' : 'collapsed'}`}>
@@ -1796,7 +2091,7 @@ function App() {
         <div className="canvas-search"><input value={canvasSearch} onChange={(event) => setCanvasSearch(event.target.value)} placeholder="搜索提示词、模板、模型或分组…" />{canvasSearch && <div className="canvas-search-results">{searchResults.length ? searchResults.map((node) => <button key={node.id} onClick={() => focusWorkflowNode(node)}><b>{node.kind === 'modify' ? '提示词修改' : '提示词反推'}</b><span>{node.workflowGroupName || node.templateLabel || node.model}</span></button>) : <p>没有匹配节点</p>}</div>}</div>
         <div className="workflow-history-bar"><button title="撤销节点操作" disabled={!nodeHistoryRef.current.past.length} onClick={() => restoreNodeHistory('undo')}>↶</button><button title="重做节点操作" disabled={!nodeHistoryRef.current.future.length} onClick={() => restoreNodeHistory('redo')}>↷</button></div>
         <button className="fit-canvas" style={{ position: 'absolute', zIndex: 6, right: 'calc(min(340px, 42%) + 24px)', top: 10, height: 34, border: '1px solid #d4cce7', borderRadius: 9, background: '#fff', color: '#393445', padding: '0 11px', cursor: 'pointer', whiteSpace: 'nowrap' }} onMouseDown={(event) => event.preventDefault()} onClick={() => api.current?.scrollToContent(sceneRef.current.elements, { fitToViewport: true, viewportZoomFactor: 0.85 })}>查看全部</button>
-        {(selectedNodeIds.length > 0 || selectedCanvasIds.length > 0 || canComposeGeneration) && <div className="workflow-selection-bar" style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}>{selectedNodeIds.length > 0 && <><b>已选 {selectedNodeIds.length} 个节点</b><button onClick={duplicateSelectedWorkflowNodes}>复制</button><button onClick={groupSelectedWorkflowNodes}>分组</button><button onClick={renameSelectedGroup}>改名</button><button onClick={ungroupSelected}>解散</button><button onClick={collapseSelected}>折叠/展开</button><button onClick={connectSelectedToImage}>连接图片</button><button onClick={() => reorderSelected(false)}>置底</button><button onClick={() => reorderSelected(true)}>置顶</button><button onClick={deleteSelectedWorkflowNodes}>删除</button></>}<button onClick={() => setSkillLibraryOpen(true)}>✦ Skill</button>{canComposeGeneration && <button className="primary" onClick={generateComposition}>用提示词＋产品图生图</button>}<button onClick={() => { setSelectedNodeIds([]); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消</button></div>}
+        {(selectedNodeIds.length > 0 || canComposeGeneration) && <div className="workflow-selection-bar" style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}>{selectedNodeIds.length > 0 && <><b>已选 {selectedNodeIds.length} 个节点</b><button onClick={duplicateSelectedWorkflowNodes}>复制</button><button onClick={groupSelectedWorkflowNodes}>分组</button><button onClick={renameSelectedGroup}>改名</button><button onClick={ungroupSelected}>解散</button><button onClick={collapseSelected}>折叠/展开</button><button onClick={connectSelectedToImage}>连接图片</button><button onClick={() => reorderSelected(false)}>置底</button><button onClick={() => reorderSelected(true)}>置顶</button><button onClick={deleteSelectedWorkflowNodes}>删除</button></>}{canComposeGeneration && <button className="primary" onClick={generateComposition}>用提示词＋产品图生图</button>}</div>}
         <Excalidraw key={`${activeProjectId}:${canvasInstanceVersion}`} theme={canvasTheme === 'light' ? 'light' : 'dark'} excalidrawAPI={(instance) => {
           api.current = instance
           // initialData 会先被 Excalidraw 内部默认状态覆盖一次；实例就绪后的下一帧再同步，
@@ -1893,11 +2188,15 @@ function App() {
         </Excalidraw>
         <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
          {selectedImageToolbarPosition && <div className="generated-image-toolbar" style={selectedImageToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
+           <button className="text-edit-primary" onClick={openTextEditForSelection}>▣ 编辑文字</button>
+           <button className="quick-edit-primary" onClick={openQuickEditForSelection}>✦ 快速编辑</button>
            {selected?.customData?.promptNodeId && <><button onClick={downloadGeneratedOriginal}>⇩ 下载原图</button><button onClick={saveGeneratedImageToVault}>★ 收藏到提示词库</button></>}
-           <button className="primary" onClick={openMultiAngleForSelection}>◇ 多角度</button>
+           <button className="primary" onClick={openMultiAngleForSelection} disabled={multiAnglePreparing}>{multiAnglePreparing ? '正在读取原图…' : '◇ 多角度'}</button>
            <button onClick={() => setSkillLibraryOpen(true)}>✦ Skill</button>
            <button onClick={() => { setSelected(null); setSelectedCanvasIds([]); setSelectedNodeIds([]); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消</button>
          </div>}
+         {textEditOpen && <TextEditDialog items={textEditItems} onChange={(id, value) => setTextEditItems((current) => current.map((item) => item.id === id ? { ...item, value } : item))} onGenerate={runTextEdit} onClose={() => !textEditBusy && setTextEditOpen(false)} busy={textEditBusy} recognizing={textEditRecognizing} error={textEditError} />}
+         {quickEditOpen && selectedImageToolbarPosition && <QuickEditPopover value={quickEditText} onChange={setQuickEditText} onSubmit={runQuickEdit} onClose={() => !quickEditBusy && setQuickEditOpen(false)} busy={quickEditBusy} error={quickEditError} position={quickEditPosition} />}
          {multiAngleOpen && <MultiAngleDialog value={assistantGenerationValue} previewUrl={selectedFile?.dataURL || ''} onClose={() => setMultiAngleOpen(false)} onUse={applyMultiAngleAndGenerate} />}
       </section>
       <aside className={`detail assistant-detail ${rightTab === 'assistant' ? 'assistant-workbench' : ''}`} style={{ flexBasis: detailWidth }}>
@@ -1924,7 +2223,6 @@ function App() {
           </section>
           <div className="chat-list">
             {selectedWorkflowNode && assistantContext && <article className="current-node-card"><header><b>当前节点提示词</b><span className="sync-badge">实时同步</span></header><div className="result-meta"><span>{selectedWorkflowNode.model || aiStatus?.model || '当前模型'}</span><span>{selectedWorkflowNode.templateLabel || assistantTemplate}</span><span>V{assistantVersionCount}</span></div><p>{assistantContext}</p><footer><button onClick={() => navigator.clipboard.writeText(assistantContext)}>复制当前提示词</button></footer></article>}
-            {!chatMessages.length && !selectedWorkflowNode && <section className="assistant-empty"><strong>从当前内容开始</strong><p>选择一个动作，助手会自动带上当前图片和提示词上下文。</p><div>{assistantQuickActions.map((action) => <button key={action} onClick={() => setAssistantInput(action)}>{action}</button>)}</div></section>}
             {chatMessages.map((message) => <article key={message.id} className={`${message.role} ${message.role === 'assistant' && message.isPrompt ? 'prompt-card' : ''}`}><header><b>{message.role === 'user' ? '你' : message.role === 'error' ? '处理失败' : message.source === 'reverse' ? '同步反推结果' : message.isPrompt ? '助手修改版本' : message.model || '助手'}</b><time>{new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>{message.role === 'assistant' && message.isPrompt && <div className="result-meta"><span>{message.model || aiStatus?.model || '当前模型'}</span><span>{message.templateLabel || '助手修改版本'}</span>{message.linkedToNode && <span>已同步节点</span>}</div>}<p>{message.text}</p>{message.role === 'assistant' && message.isPrompt && <footer><button className="primary" onClick={() => applyAssistantResult(message)}>写入节点</button><button onClick={() => applyAssistantResult(message, true)}>保存新版本</button><button onClick={() => generateAssistantMessagePreview(message)} disabled={!selectedWorkflowNode && !selectedFile}>{selectedFile ? '按当前产品图生成预览' : '生成预览'}</button><button onClick={() => navigator.clipboard.writeText(message.text)}>复制</button></footer>}</article>)}
           </div>
           <footer className="assistant-composer"><div className="composer-context"><span>{selectedFile ? '图片 ×1' : '未关联图片'}</span><span>{selectedWorkflowNode ? `${assistantContextTitle} · V${assistantVersionCount}` : '未关联节点'}</span></div><div className="composer-input"><textarea value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendAssistant() }} placeholder="描述你想分析、反推或修改的内容…" /><button className="send-button" title="发送（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || !assistantInput.trim()}>{assistantBusy ? '…' : '➤'}</button></div></footer>

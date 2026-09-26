@@ -23,7 +23,7 @@ pub struct ImageServiceState { config: Arc<Mutex<ImageServiceConfig>>, path: Pat
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GenerationRequest { pub prompt: String, pub size: Option<String>, pub aspect_ratio: Option<String>, pub image_size: Option<String>, pub count: Option<u8>, pub model: Option<String>, pub image_data_url: Option<String>, pub reference_images: Option<Vec<String>> }
+pub struct GenerationRequest { pub prompt: String, pub size: Option<String>, pub requested_size: Option<String>, pub aspect_ratio: Option<String>, pub image_size: Option<String>, pub count: Option<u8>, pub model: Option<String>, pub image_data_url: Option<String>, pub mask_data_url: Option<String>, pub reference_images: Option<Vec<String>> }
 
 pub fn init(data_dir: PathBuf) -> ImageServiceState {
     let path = data_dir.join("image-service.json");
@@ -104,7 +104,17 @@ fn request_failure(action: &str, endpoint: &str, error: &reqwest::Error) -> Stri
 fn nano_payload(input: &GenerationRequest, model: &str) -> Value {
     let mut images = input.reference_images.clone().unwrap_or_default();
     if images.is_empty() { if let Some(image) = input.image_data_url.as_ref().filter(|s| !s.is_empty()) { images.push(image.clone()); } }
-    json!({"model":model,"prompt":input.prompt,"image":images,"aspect_ratio":input.aspect_ratio.as_deref().unwrap_or("16:9"),"picType":"png"})
+    let quality = input.image_size.as_deref().filter(|value| matches!(*value, "1K" | "2K" | "4K"));
+    let output_size = input.requested_size.as_deref().or(input.size.as_deref());
+    let mut payload = json!({"model":model,"prompt":input.prompt,"image":images,"aspect_ratio":input.aspect_ratio.as_deref().unwrap_or("16:9"),"picType":"png"});
+    // 迅客旧版接口主要靠模型名区分清晰度；新版同时接受显式分辨率。
+    // 仅在用户选择了明确档位时补充这些字段，避免影响旧版 1K/2K 请求。
+    if let Some(value) = quality {
+        payload["resolution"] = json!(value);
+        payload["image_size"] = json!(value);
+    }
+    if let Some(value) = output_size { payload["size"] = json!(value); }
+    payload
 }
 
 #[cfg(test)]
@@ -112,12 +122,14 @@ mod nano_tests {
     use super::*;
     #[test]
     fn documented_request_uses_image_array() {
-        let input: GenerationRequest = serde_json::from_value(json!({"prompt":"scene","imageDataUrl":"original","referenceImages":["product-a","product-b"],"aspectRatio":"16:9"})).unwrap();
+        let input: GenerationRequest = serde_json::from_value(json!({"prompt":"scene","imageDataUrl":"original","referenceImages":["product-a","product-b"],"aspectRatio":"16:9","imageSize":"4K","requestedSize":"3840x2160"})).unwrap();
         let body = nano_payload(&input, "nano-banana-pro_2k");
         assert_eq!(body["image"], json!(["product-a", "product-b"]));
         assert_eq!(body["picType"], "png");
+        assert_eq!(body["resolution"], "4K");
+        assert_eq!(body["image_size"], "4K");
+        assert_eq!(body["size"], "3840x2160");
         assert!(body.get("reference_images").is_none());
-        assert!(body.get("size").is_none());
     }
     #[test]
     fn documented_async_response_and_final_response() {
@@ -148,6 +160,38 @@ fn normalize_inline_image(value: &str) -> String {
     let value = value.trim();
     if value.starts_with("data:image/") || value.starts_with("http://") || value.starts_with("https://") { value.to_string() }
     else { format!("data:image/png;base64,{value}") }
+}
+
+fn response_detail(bytes: &[u8]) -> String {
+    if let Ok(body) = serde_json::from_slice::<Value>(bytes) {
+        return service_error(&body);
+    }
+    let text = String::from_utf8_lossy(bytes).replace(['\r', '\n'], " ");
+    let text = text.trim();
+    if text.is_empty() { "服务端未返回错误说明".into() } else { text.chars().take(240).collect() }
+}
+
+fn retryable_download_status(code: reqwest::StatusCode) -> bool {
+    code.as_u16() == 400 || code.as_u16() == 404 || code.as_u16() == 408 || code.as_u16() == 409 || code.as_u16() == 425 || code.as_u16() == 429 || code.is_server_error()
+}
+
+async fn download_bytes(client: &reqwest::Client, source: &str, api_key: &str, authorize: bool, label: &str) -> Result<Vec<u8>, String> {
+    let mut last_error = String::new();
+    for attempt in 0..4 {
+        let request = client.get(source);
+        let result = if authorize { auth(request, api_key).send().await } else { request.send().await };
+        let response = result.map_err(|error| format!("{label}：{error}"))?;
+        let code = response.status();
+        let bytes = response.bytes().await.map_err(|error| format!("读取图片响应失败：{error}"))?.to_vec();
+        if code.is_success() { return Ok(bytes); }
+        last_error = format!("{label}（HTTP {code}）：{}", response_detail(&bytes));
+        if attempt < 3 && retryable_download_status(code) {
+            tokio::time::sleep(Duration::from_millis(800 * (attempt + 1) as u64)).await;
+            continue;
+        }
+        return Err(last_error);
+    }
+    Err(last_error)
 }
 
 pub async fn test(state: &ImageServiceState) -> Result<Value, String> {
@@ -202,6 +246,14 @@ pub async fn submit(state: &ImageServiceState, input: GenerationRequest) -> Resu
         let extension = if mime.contains("png") { "png" } else if mime.contains("webp") { "webp" } else { "jpg" };
         let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("product.{extension}")).mime_str(mime).map_err(|e| e.to_string())?;
         let mut form = reqwest::multipart::Form::new().text("model", model.clone()).text("prompt", input.prompt.clone()).text("size", size).text("response_format", "url").part("image", part);
+        if let Some(mask_url) = input.mask_data_url.as_deref().filter(|value| !value.is_empty()) {
+            let (mask_header, mask_encoded) = mask_url.split_once(',').ok_or("编辑遮罩数据格式不正确")?;
+            let mask_mime = mask_header.strip_prefix("data:").and_then(|value| value.split(';').next()).unwrap_or("image/png");
+            let mask_bytes = base64::engine::general_purpose::STANDARD.decode(mask_encoded).map_err(|_| "编辑遮罩解码失败")?;
+            if mask_bytes.len() > 12_000_000 { return Err("编辑遮罩超过 12MB，请重试".into()); }
+            let mask_part = reqwest::multipart::Part::bytes(mask_bytes).file_name("mask.png").mime_str(mask_mime).map_err(|e| e.to_string())?;
+            form = form.part("mask", mask_part);
+        }
         if let Some(value) = input.aspect_ratio { form = form.text("aspect_ratio", value); }
         if let Some(value) = input.image_size { form = form.text("image_size", value); }
         auth(client()?.post(url(&c.base_url, path)).multipart(form), &c.api_key)
@@ -258,20 +310,13 @@ pub async fn download(state: &ImageServiceState, source: String) -> Result<Value
         return Err("图像服务返回了无效的图片地址".into());
     }
     if source.len() > 20_000_000 && !source.starts_with("http") { return Err("生成图片数据过大".into()); }
-    let request = client()?.get(&source);
-    let response = if same_origin(&source, &c.base_url) { auth(request, &c.api_key) } else { request }.send().await.map_err(|e| format!("下载生成图片失败：{e}"))?;
-    let code = response.status();
-    if !code.is_success() { return Err(format!("下载生成图片失败（{code}）")); }
-    let bytes = response.bytes().await.map_err(|e| format!("读取生成图片失败：{e}"))?.to_vec();
+    let bytes = download_bytes(&client()?, &source, &c.api_key, same_origin(&source, &c.base_url), "下载生成图片失败") .await?;
     if image_mime(&bytes).is_some() { return image_data_url(bytes); }
     if let Ok(body) = serde_json::from_slice::<Value>(&bytes) {
         let nested = body.pointer("/data/0/url").or_else(|| body.pointer("/url")).or_else(|| body.pointer("/image_url")).and_then(Value::as_str);
         if let Some(nested_url) = nested {
-            let nested_request = client()?.get(nested_url);
-            let nested_response = if same_origin(nested_url, &c.base_url) { auth(nested_request, &c.api_key) } else { nested_request }.send().await.map_err(|e| format!("下载二次图片地址失败：{e}"))?;
-            let nested_code = nested_response.status();
-            if !nested_code.is_success() { return Err(format!("下载二次图片地址失败（{nested_code}）")); }
-            return image_data_url(nested_response.bytes().await.map_err(|e| e.to_string())?.to_vec());
+            let nested_bytes = download_bytes(&client()?, nested_url, &c.api_key, same_origin(nested_url, &c.base_url), "下载二次图片地址失败").await?;
+            return image_data_url(nested_bytes);
         }
         if let Some(b64) = body.pointer("/data/0/b64_json").or_else(|| body.pointer("/b64_json")).and_then(Value::as_str) {
             return image_data_url(base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| "图像服务返回的 Base64 图片无法解码")?);
