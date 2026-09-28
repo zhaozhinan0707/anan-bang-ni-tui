@@ -23,16 +23,20 @@ $repository = $Matches[1]
 $packagePath = Join-Path $appRoot 'package.json'
 $tauriPath = Join-Path $appRoot 'src-tauri\tauri.conf.json'
 $cargoPath = Join-Path $appRoot 'src-tauri\Cargo.toml'
-$package = Get-Content -LiteralPath $packagePath -Raw | ConvertFrom-Json
-$package.version = $Version
-$package | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $packagePath -Encoding utf8
-$tauri = Get-Content -LiteralPath $tauriPath -Raw | ConvertFrom-Json
-$tauri.version = $Version
-$tauri.plugins.updater.endpoints = @("https://github.com/$repository/releases/latest/download/latest.json")
-$tauri | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $tauriPath -Encoding utf8
-$cargo = Get-Content -LiteralPath $cargoPath -Raw
-$cargo = $cargo -replace '(?m)^(version\s*=\s*")[^"]+("\s*)$', "`${1}$Version`${2}"
-Set-Content -LiteralPath $cargoPath -Value ($cargo.TrimEnd() + [Environment]::NewLine) -Encoding utf8
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$endpoint = "https://github.com/$repository/releases/latest/download/latest.json"
+$versionPattern = [regex]::new('("version"\s*:\s*")[^"]+(")')
+$packageRaw = [System.IO.File]::ReadAllText($packagePath, $utf8)
+$packageNext = $versionPattern.Replace($packageRaw, "`${1}$Version`${2}", 1)
+if ($packageNext -ne $packageRaw) { [System.IO.File]::WriteAllText($packagePath, $packageNext, $utf8) }
+$tauriRaw = [System.IO.File]::ReadAllText($tauriPath, $utf8)
+$tauriNext = $versionPattern.Replace($tauriRaw, "`${1}$Version`${2}", 1)
+$endpointPattern = [regex]::new('("https://github\.com/[^"]+/releases/latest/download/latest\.json")')
+$tauriNext = $endpointPattern.Replace($tauriNext, "`"$endpoint`"", 1)
+if ($tauriNext -ne $tauriRaw) { [System.IO.File]::WriteAllText($tauriPath, $tauriNext, $utf8) }
+$cargoRaw = [System.IO.File]::ReadAllText($cargoPath, $utf8)
+$cargoNext = $cargoRaw -replace '(?m)^(version\s*=\s*")[^"]+("\s*)$', "`${1}$Version`${2}"
+if ($cargoNext -ne $cargoRaw) { [System.IO.File]::WriteAllText($cargoPath, $cargoNext, $utf8) }
 
 $secure = Get-Content -LiteralPath $passwordFile | ConvertTo-SecureString
 $credential = [System.Management.Automation.PSCredential]::new('signer', $secure)
