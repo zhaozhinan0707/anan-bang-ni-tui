@@ -2021,7 +2021,10 @@ function App() {
   const downloadGeneratedOriginal = async () => {
     if (!selectedFile || !selected?.customData?.promptNodeId) return
     try {
-      const source = selected.customData?.generation?.sourceUrl || selectedFile.dataURL
+      // 生成完成时已经把服务端返回的完整图片保存到了本地文件仓库。
+      // sourceUrl 可能是短期有效或已被服务端清理的对象存储地址，不能作为原图下载的首选来源。
+      const source = selectedFile.dataURL || selected.customData?.generation?.sourceUrl
+      if (!source) throw new Error('没有可下载的原图数据')
       const result = await invoke('save_generation_original', { source })
       alert(`原图已下载到：${result.path}`)
     } catch (error) { alert(`原图下载失败：${errorMessage(error)}`) }
