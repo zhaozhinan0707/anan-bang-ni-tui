@@ -38,6 +38,7 @@ $cargoRaw = [System.IO.File]::ReadAllText($cargoPath, $utf8)
 $cargoNext = $cargoRaw -replace '(?m)^(version\s*=\s*")[^"]+("\s*)$', "`${1}$Version`${2}"
 if ($cargoNext -ne $cargoRaw) { [System.IO.File]::WriteAllText($cargoPath, $cargoNext, $utf8) }
 
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
 $secure = Get-Content -LiteralPath $passwordFile | ConvertTo-SecureString
 $credential = [System.Management.Automation.PSCredential]::new('signer', $secure)
 $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $privateKey -Raw
