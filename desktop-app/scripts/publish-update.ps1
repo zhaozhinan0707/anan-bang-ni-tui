@@ -4,6 +4,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$systemModulePaths = @(
+  (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+  (Join-Path $env:WINDIR 'system32\WindowsPowerShell\v1.0\Modules')
+)
+$env:PSModulePath = $systemModulePaths -join [IO.Path]::PathSeparator
 $appRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $appRoot
 $keyRoot = Join-Path $env:USERPROFILE '.prompt-vault-updater'
