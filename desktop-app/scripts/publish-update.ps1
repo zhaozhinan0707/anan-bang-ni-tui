@@ -75,8 +75,12 @@ $manifest = [ordered]@{
 $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding utf8
 
 $assets = @($archive.FullName, $signaturePath, $manifestPath)
-& gh release view "v$Version" --repo $repository *> $null
-if ($LASTEXITCODE -eq 0) {
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$null = & gh release view "v$Version" --repo $repository 2>$null
+$releaseExists = $LASTEXITCODE -eq 0
+$ErrorActionPreference = $previousErrorAction
+if ($releaseExists) {
   & gh release upload "v$Version" @assets --repo $repository --clobber
   & gh release edit "v$Version" --repo $repository --title "AnanBangNiTui $Version" --notes $Notes --latest
 } else {
