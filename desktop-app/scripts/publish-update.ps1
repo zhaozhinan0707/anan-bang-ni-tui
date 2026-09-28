@@ -72,7 +72,7 @@ $manifest = [ordered]@{
     }
   }
 }
-$manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+[System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
 
 $assets = @($archive.FullName, $signaturePath, $manifestPath)
 $previousErrorAction = $ErrorActionPreference
