@@ -8,7 +8,7 @@
     "build": "vite build && tauri build",
     "build:web": "vite build",
     "preview": "vite preview",
-    "publish:update": "powershell -ExecutionPolicy Bypass -File scripts/publish-update.ps1"
+  "publish:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-update.ps1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
