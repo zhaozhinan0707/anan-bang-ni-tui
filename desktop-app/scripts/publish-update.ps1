@@ -11,13 +11,13 @@ $privateKey = Join-Path $keyRoot 'prompt-vault.key'
 $passwordFile = Join-Path $keyRoot 'signing-password.dpapi'
 
 if (!(Test-Path -LiteralPath $privateKey) -or !(Test-Path -LiteralPath $passwordFile)) {
-  throw '未找到本机更新签名密钥，不能发布不受信任的更新。'
+  throw 'Updater signing key or password file was not found; refusing to publish an untrusted update.'
 }
-if (!(Get-Command gh -ErrorAction SilentlyContinue)) { throw '未安装 GitHub CLI（gh）。' }
+if (!(Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI (gh) is not installed.' }
 & gh auth status | Out-Null
 
 $remote = (& git -C $repoRoot remote get-url origin).Trim()
-if ($remote -notmatch 'github\.com[/:]([^/]+/[^/.]+)(?:\.git)?$') { throw 'origin 不是有效的 GitHub 仓库。' }
+if ($remote -notmatch 'github\.com[/:]([^/]+/[^/.]+)(?:\.git)?$') { throw 'origin is not a valid GitHub repository.' }
 $repository = $Matches[1]
 
 $packagePath = Join-Path $appRoot 'package.json'
@@ -42,9 +42,9 @@ try { Push-Location $appRoot; pnpm.cmd run build } finally { Pop-Location; Remov
 
 $bundle = Join-Path $appRoot 'src-tauri\target\release\bundle\nsis'
 $nativeInstaller = Get-ChildItem -LiteralPath $bundle -Filter '*setup.exe' | Where-Object Name -NotLike 'AnanBangNiTui_*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (!$nativeInstaller) { throw '未找到 Tauri Windows 更新安装包。' }
+if (!$nativeInstaller) { throw 'Tauri Windows updater installer was not found.' }
 $nativeSignature = "$($nativeInstaller.FullName).sig"
-if (!(Test-Path -LiteralPath $nativeSignature)) { throw '未找到更新包签名。' }
+if (!(Test-Path -LiteralPath $nativeSignature)) { throw 'Updater package signature was not found.' }
 $archivePath = Join-Path $bundle "AnanBangNiTui_${Version}_x64-setup.exe"
 $signaturePath = "$archivePath.sig"
 Copy-Item -LiteralPath $nativeInstaller.FullName -Destination $archivePath -Force
@@ -68,8 +68,8 @@ $assets = @($archive.FullName, $signaturePath, $manifestPath)
 & gh release view "v$Version" --repo $repository *> $null
 if ($LASTEXITCODE -eq 0) {
   & gh release upload "v$Version" @assets --repo $repository --clobber
-  & gh release edit "v$Version" --repo $repository --title "阿男帮你推 $Version" --notes $Notes --latest
+  & gh release edit "v$Version" --repo $repository --title "AnanBangNiTui $Version" --notes $Notes --latest
 } else {
-  & gh release create "v$Version" @assets --repo $repository --title "阿男帮你推 $Version" --notes $Notes --latest
+  & gh release create "v$Version" @assets --repo $repository --title "AnanBangNiTui $Version" --notes $Notes --latest
 }
-Write-Host "发布完成：https://github.com/$repository/releases/tag/v$Version"
+Write-Host "Release published: https://github.com/$repository/releases/tag/v$Version"
