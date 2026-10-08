@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, io::{Read, Write}, net::TcpListener, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 
 const BRIDGE_PORT: u16 = 47777;
+const MAX_BODY_BYTES: usize = 100_000_000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +40,7 @@ pub struct AiState {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct CanvasImport {
     pub id: String,
     pub image_data_url: String,
@@ -49,6 +50,17 @@ pub struct CanvasImport {
     pub template_label: String,
     pub source_url: String,
     pub created_at: i64,
+    pub schema_version: u32,
+    pub source_type: String,
+    pub scene_name: String,
+    pub blender_version: String,
+    pub auxiliary_images: std::collections::HashMap<String, String>,
+    pub camera: serde_json::Value,
+    pub lighting: serde_json::Value,
+    pub render: serde_json::Value,
+    pub lock_camera: bool,
+    pub lock_lighting: bool,
+    pub use_structure_passes: bool,
 }
 
 #[derive(Serialize)]
@@ -111,6 +123,8 @@ pub fn enqueue_canvas_import(state: &AiState, item: CanvasImport) -> Result<(), 
     if !item.image_data_url.starts_with("data:image/") { return Err("图片数据格式错误".into()); }
     if item.image_data_url.len() > 24_000_000 { return Err("图片过大，请缩小后重试".into()); }
     if item.prompt.len() > 80_000 { return Err("提示词内容过长".into()); }
+    if item.auxiliary_images.len() > 3 { return Err("辅助通道最多 3 张".into()); }
+    if item.auxiliary_images.values().any(|value| !value.starts_with("data:image/") || value.len() > 24_000_000) { return Err("辅助通道格式错误或图片过大".into()); }
     let mut queue = state.canvas_imports.lock().map_err(|_| "画布接收队列不可用")?;
     if queue.iter().any(|queued| queued.id == item.id) { return Ok(()); }
     while queue.len() >= 20 { queue.pop_front(); }
@@ -180,7 +194,32 @@ fn respond(stream: &mut std::net::TcpStream, status: &str, body: &str, origin: O
 fn handle_http(mut stream: std::net::TcpStream, state: &AiState) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut raw = Vec::new();
-    let _ = stream.read_to_end(&mut raw);
+    let mut buffer = [0_u8; 8192];
+    let mut expected_len = None;
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                raw.extend_from_slice(&buffer[..count]);
+                if raw.len() > MAX_BODY_BYTES + 64 * 1024 {
+                    return respond(&mut stream, "413 Payload Too Large", r#"{"ok":false,"error":"请求体过大"}"#, None);
+                }
+                if expected_len.is_none() {
+                    if let Some(header_end) = raw.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&raw[..header_end]);
+                        let body_len = header.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+                        }).unwrap_or(0);
+                        expected_len = Some(header_end + 4 + body_len);
+                    }
+                }
+                if expected_len.is_some_and(|length| raw.len() >= length) { break; }
+            }
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => break,
+            Err(_) => return,
+        }
+    }
     let request = String::from_utf8_lossy(&raw);
     let mut parts = request.splitn(2, "\r\n\r\n");
     let head = parts.next().unwrap_or_default();
@@ -189,6 +228,7 @@ fn handle_http(mut stream: std::net::TcpStream, state: &AiState) {
     let origin = head.lines().find_map(|line| line.strip_prefix("Origin: ").or_else(|| line.strip_prefix("origin: ")));
     if origin.is_some_and(|value| !value.starts_with("chrome-extension://")) { return respond(&mut stream, "403 Forbidden", r#"{"ok":false}"#, None); }
     if first.starts_with("OPTIONS ") { return respond(&mut stream, "204 No Content", "", origin); }
+    if first.starts_with("GET /api/bridge-status") { return respond(&mut stream, "200 OK", r#"{"ok":true,"protocolVersion":2,"product":"阿男帮你推","target":"当前活动项目"}"#, origin); }
     if first.starts_with("GET /api/ai-config") { return respond(&mut stream, "200 OK", &serde_json::to_string(&status(state)).unwrap_or_else(|_| "{}".into()), origin); }
     if first.starts_with("POST /api/ai-config") {
         match serde_json::from_str::<AiConfig>(body) {
@@ -203,6 +243,21 @@ fn handle_http(mut stream: std::net::TcpStream, state: &AiState) {
                 Err(error) => respond(&mut stream, "400 Bad Request", &serde_json::json!({"ok":false,"error":error}).to_string(), origin),
             },
             Err(_) => respond(&mut stream, "400 Bad Request", r#"{"ok":false,"error":"发送内容格式错误"}"#, origin),
+        };
+    }
+    if first.starts_with("POST /api/blender-import") {
+        return match serde_json::from_str::<CanvasImport>(body) {
+            Ok(mut item) => {
+                if item.schema_version != 2 { return respond(&mut stream, "400 Bad Request", r#"{"ok":false,"error":"协议版本不兼容"}"#, origin); }
+                if !matches!(item.source_type.as_str(), "blender_viewport" | "blender_render") { return respond(&mut stream, "400 Bad Request", r#"{"ok":false,"error":"Blender 导入模式无效"}"#, origin); }
+                item.model = "Blender Bridge".into();
+                item.template_label = "Blender 场景桥接".into();
+                match enqueue_canvas_import(state, item) {
+                    Ok(()) => respond(&mut stream, "200 OK", r#"{"ok":true}"#, origin),
+                    Err(error) => respond(&mut stream, "400 Bad Request", &serde_json::json!({"ok":false,"error":error}).to_string(), origin),
+                }
+            }
+            Err(error) => respond(&mut stream, "400 Bad Request", &serde_json::json!({"ok":false,"error":format!("发送内容格式错误：{error}")}).to_string(), origin),
         };
     }
     respond(&mut stream, "404 Not Found", r#"{"ok":false}"#, origin)

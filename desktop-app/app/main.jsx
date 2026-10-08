@@ -131,6 +131,7 @@ const formatGenerationDuration = (milliseconds = 0) => {
 }
 const formatPhaseDuration = (milliseconds = 0) => milliseconds >= 60_000 ? formatGenerationDuration(milliseconds) : `${(Math.max(0, milliseconds) / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}秒`
 const PRODUCT_CONSISTENCY_INSTRUCTION = '以输入的产品参考图为唯一外观依据，严格保持产品身份与外观一致：不得改变车架几何结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、折叠机构、接口、配色、材质、贴花、Logo及各部件比例。根据后续完整提示词生成新场景，不要重新设计产品，不要添加或删除部件。'
+const AGENT_CONSTRAINED_EDIT_INSTRUCTION = '【Agent 原图约束编辑｜最高优先级】这是在第一张原图基础上的受约束修改，不是自由重绘。只改变用户在讨论中明确要求修改的内容；未明确要求改变的产品身份、车型、车架几何、车把、立管、座椅、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、折叠机构、接口、配色、材质、贴花、Logo、部件数量、比例、朝向、人物、构图、镜头和背景必须保持原图一致。严禁把自行车改成滑板车、摩托车或其他车型，严禁重新设计车架、增删部件、水平镜像或改变产品可见侧面。若创意要求与原图产品事实冲突，以原图为准。'
 const GENERATION_SIZES = {
   '1K': { '9:16': '576x1024', '2:3': '683x1024', '3:4': '768x1024', '4:5': '819x1024', '1:1': '1024x1024', '5:4': '1024x819', '4:3': '1024x768', '3:2': '1024x683', '16:9': '1024x576', '21:9': '1024x439' },
   '2K': { '9:16': '1152x2048', '2:3': '1365x2048', '3:4': '1536x2048', '4:5': '1638x2048', '1:1': '2048x2048', '5:4': '2048x1638', '4:3': '2048x1536', '3:2': '2048x1365', '16:9': '2048x1152', '21:9': '2048x878' },
@@ -476,6 +477,18 @@ function TextEditDialog({ items, onChange, onGenerate, onClose, busy = false, er
   </div>
 }
 
+const stripBlenderConstraintBlocks = (value) => String(value || '').replace(/\n\n【(?:锁定摄像机|锁定光源|锁定产品朝向|结构通道)】[\s\S]*?(?=\n\n【(?:锁定摄像机|锁定光源|锁定产品朝向|结构通道)】|$)/g, '').trim()
+const blenderPromptForNode = (node, changes = {}) => {
+  const next = { ...node, ...changes }, meta = next.blenderMeta || {}, camera = meta.camera || {}, lighting = meta.lighting || {}, render = meta.render || {}
+  const base = (next.blenderBasePrompt || stripBlenderConstraintBlocks(next.prompt)).trim() || '基于当前 Blender 场景生成高质量画面，保持主体布局、空间关系和构图参考。'
+  const cameraText = next.lockCamera ? `【锁定摄像机】严格保持 Blender 摄像机的构图、透视、画幅和机位。焦距 ${camera.lens ?? '-'}mm，传感器 ${camera.sensorWidth ?? '-'}mm，位置 ${JSON.stringify(camera.location || [])}，旋转 ${JSON.stringify(camera.rotation || [])}，分辨率 ${render.width || '-'}×${render.height || '-'}。` : ''
+  const lightText = next.lockLighting ? `【锁定光源】严格保持 Blender 场景的主光方向、色温、强弱关系、阴影和世界环境光。灯光摘要：${JSON.stringify((lighting.lights || []).slice(0, 8))}；世界环境：${JSON.stringify(lighting.world || {})}。` : ''
+  const orientationText = next.lockProductOrientation !== false ? '【锁定产品朝向】Blender RGB 渲染图是产品几何姿态和朝向的唯一依据。严格保持车头、车尾、前轮、后轮在画面中的左右关系以及当前可见侧面；禁止水平翻转、镜像、掉头或改成相反侧视角。场景参考图只影响环境、构图和光线，不得覆盖产品朝向。' : ''
+  const references = next.referenceImages || []
+  const structureText = next.useStructurePasses ? `【结构通道】${references.length ? `已提供${references.map((item) => item.role || '结构参考').join('、')}` : '使用 Blender 场景几何信息'}，用于约束空间深度、表面朝向和物体边界，不作为颜色或材质来源。` : ''
+  return [base, cameraText, lightText, orientationText, structureText].filter(Boolean).join('\n\n')
+}
+
 function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
   const generationGuardUntil = useRef(0)
@@ -549,14 +562,15 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
       const position = toScreen(node.x, node.y), text = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt
       const references = node.referenceImages || (node.referenceImage ? [{ ...node.referenceImage, id: `legacy-${node.id}`, role: '补充参考' }] : [])
       return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''}`} style={{ width: node.width, minHeight: node.collapsed ? 0 : node.height, transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
-        <header className="node-drag-handle" onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点"><span className={`node-status ${node.status || (node.busy ? 'running' : 'completed')}`} /> <span>{node.kind === 'compose' ? 'IMG' : node.kind === 'skill' ? 'SKILL' : 'LLM'}</span><b>{node.kind === 'modify' ? '提示词修改' : node.kind === 'compose' ? '组合生图' : node.kind === 'skill' ? node.skillName || 'Skill 工作流' : '提示词反推'}</b><GenerationTimer node={node} /><small>{node.model}</small><button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : '－'}</button></header>
+        <header className="node-drag-handle" onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点"><span className={`node-status ${node.status || (node.busy ? 'running' : 'completed')}`} /> <span>{node.kind === 'blender' ? '3D' : node.kind === 'compose' ? 'IMG' : node.kind === 'skill' ? 'SKILL' : 'LLM'}</span><b>{node.kind === 'blender' ? 'Blender 场景' : node.kind === 'modify' ? '提示词修改' : node.kind === 'compose' ? '组合生图' : node.kind === 'skill' ? node.skillName || 'Skill 工作流' : '提示词反推'}</b><GenerationTimer node={node} /><small>{node.model}</small><button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : '－'}</button></header>
         {!node.collapsed && <>
         {node.workflowGroupName && <div className="node-group-name">分组：{node.workflowGroupName}</div>}
         {node.kind !== 'skill' && <label className="node-template">{node.kind === 'modify' ? '修改所用模板' : '重新生成模板'}<select value={node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select><small>上次实际使用：{node.templateLabel || '默认视觉反推模板'}</small></label>}
         {node.kind === 'skill' && <small className="node-composition-note">Skill v{node.skillVersion || 1} · 输入：{(node.skillRequires || []).join('、') || '无'} · 输出：{node.skillOutputType === 'analysis' ? '分析与建议' : '完整提示词'}</small>}
         {node.kind === 'modify' && <><label>原版提示词<textarea value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /></label><label>修改要求<textarea placeholder="描述你要修改的画面内容…" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value })} /></label><label className="node-reference">补充参考图片（最多 8 张）<input type="file" multiple accept="image/*" onChange={(event) => onAttachImage(node.id, event.target.files)} /><div className="node-reference-grid">{references.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '修改参考图'} /><input value={image.role || ''} placeholder="用途，如：产品外观" onChange={(event) => onUpdate(node.id, { referenceImages: references.map((item) => item.id === image.id ? { ...item, role: event.target.value } : item), referenceImage: null })} /><button onClick={() => onRemoveImage(node.id, image.id)}>删除</button></figure>)}</div></label></>}
         {node.kind === 'compose' && <small className="node-composition-note">已关联 {references.length} 张产品参考图{node.promptReferenceImages?.length ? `，另有 ${node.promptReferenceImages.length} 张提示词参考图` : ''}；编辑提示词或重新生成均会保留产品参考。</small>}
-        <label>{node.kind === 'modify' ? '修改结果（可直接编辑）' : node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
+        {node.kind === 'blender' && <section className="node-generation-settings"><small>场景：{node.blenderMeta?.sceneName || '未命名'} · Blender {node.blenderMeta?.blenderVersion || '-'} · {node.blenderMeta?.sourceType === 'blender_render' ? '正式渲染' : '摄像机视口'}</small><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockCamera} onChange={(event) => { const lockCamera = event.target.checked, prompt = blenderPromptForNode(node, { lockCamera }); onUpdate(node.id, { lockCamera, prompt, output: prompt }) }} />锁定摄像机</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockLighting} onChange={(event) => { const lockLighting = event.target.checked, prompt = blenderPromptForNode(node, { lockLighting }); onUpdate(node.id, { lockLighting, prompt, output: prompt }) }} />锁定光源</label><label className="consistency-toggle"><input type="checkbox" checked={node.lockProductOrientation !== false} onChange={(event) => { const lockProductOrientation = event.target.checked, prompt = blenderPromptForNode(node, { lockProductOrientation }); onUpdate(node.id, { lockProductOrientation, prompt, output: prompt }) }} />锁定产品朝向（禁止镜像）</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.useStructurePasses} onChange={(event) => { const useStructurePasses = event.target.checked, prompt = blenderPromptForNode(node, { useStructurePasses }); onUpdate(node.id, { useStructurePasses, prompt, output: prompt }) }} />结构约束（{references.length}）</label></section>}
+        <label>{node.kind === 'modify' ? '修改结果（可直接编辑）' : node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => node.kind === 'blender' ? onUpdate(node.id, { prompt: event.target.value, output: event.target.value, blenderBasePrompt: stripBlenderConstraintBlocks(event.target.value) }) : onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
         {!!node.versionHistory?.length && <details className="node-versions"><summary>历史版本（{node.versionHistory.length}）</summary>{[...node.versionHistory].reverse().map((version, index) => <button key={version.id || index} onClick={() => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: version.prompt, model: version.model || node.model, templateId: version.templateId || node.templateId, templateLabel: version.templateLabel || node.templateLabel })}><b>{new Date(version.createdAt || Date.now()).toLocaleString()}</b><span>{version.templateLabel || version.model || '历史结果'}</span></button>)}</details>}
         {node.error && <p className="node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
         {node.generationError && <p className="node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
@@ -630,6 +644,7 @@ function App() {
   const [textEditError, setTextEditError] = useState('')
   const [aiStatus, setAiStatus] = useState(null)
   const [reverseBusy, setReverseBusy] = useState(false)
+  const [blenderReferenceBusy, setBlenderReferenceBusy] = useState(false)
   const [reversePrompt, setReversePrompt] = useState('')
   const [reverseError, setReverseError] = useState('')
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
@@ -641,6 +656,11 @@ function App() {
   const [detailWidth, setDetailWidth] = useState(() => Number(localStorage.getItem('promptVault.detailWidth')) || 420)
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
+  const [assistantReferences, setAssistantReferences] = useState([])
+  const [assistantMode, setAssistantMode] = useState(() => localStorage.getItem('prompt-vault-assistant-mode') || 'image')
+  const [assistantFontScale, setAssistantFontScale] = useState(() => Math.max(.85, Math.min(1.5, Number(localStorage.getItem('prompt-vault-assistant-font-scale')) || 1)))
+  const [assistantGenerationSettings, setAssistantGenerationSettings] = useState({ ...GENERATION_DEFAULTS })
+  const [assistantGenerating, setAssistantGenerating] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
   const [compositionReferences, setCompositionReferences] = useState([])
   const [compositionInstruction, setCompositionInstruction] = useState('')
@@ -692,6 +712,7 @@ function App() {
   const input = useRef(null)
   const projectInput = useRef(null)
   const compositionReferenceInput = useRef(null)
+  const assistantReferenceInput = useRef(null)
   const boardRef = useRef(null)
   const canvasSelectionRef = useRef('')
   const nodeHistoryRef = useRef({ past: [], future: [] })
@@ -1002,6 +1023,15 @@ function App() {
     return file?.dataURL ? { id: element.id, dataURL: file.dataURL, name: `画布产品图`, mimeType: file.mimeType || 'image/png', role: '产品外观' } : null
   }).filter(Boolean), [selectedProductElements, workflowNodes])
   const canComposeGeneration = Boolean(selectedCanvasPrompt && selectedProductReferences.length)
+  const blenderReferencePair = useMemo(() => {
+    const images = selectedCanvasElements.filter((element) => element.type === 'image' && element.fileId)
+    if (images.length !== 2) return null
+    const node = workflowNodes.find((item) => item.kind === 'blender' && images.some((image) => image.id === item.sourceElementId))
+    if (!node) return null
+    const referenceElement = images.find((image) => image.id !== node.sourceElementId)
+    const referenceFile = referenceElement?.fileId ? sceneRef.current.files[referenceElement.fileId] : null
+    return referenceFile?.dataURL ? { node, referenceElement, referenceFile } : null
+  }, [selectedCanvasElements, workflowNodes])
   useEffect(() => {
     setCompositionReferences([])
     setCompositionInstruction('')
@@ -1242,6 +1272,57 @@ function App() {
   }
   const updateCompositionReference = (id, patch) => setCompositionReferences((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item))
   const removeCompositionReference = (id) => setCompositionReferences((current) => current.filter((item) => item.id !== id))
+  const addAssistantReferences = async (fileList) => {
+    const files = [...(fileList || [])].filter((file) => file?.type?.startsWith('image/'))
+    if (!files.length) return
+    const remaining = Math.max(0, 8 - assistantReferences.length)
+    if (!remaining) return alert('最多只能添加 8 张参考图。')
+    try {
+      const additions = await Promise.all(files.slice(0, remaining).map(async (file, index) => ({ id: uid(), dataURL: await readImageFile(file), name: file.name, mimeType: file.type || 'image/png', role: index === 0 && !assistantReferences.length ? '本次修改的原图，保持未提及内容不变' : '补充参考图' })))
+      setAssistantReferences((current) => [...current, ...additions].slice(0, 8))
+    } catch (error) { alert(errorMessage(error, '参考图读取失败，请重试')) }
+  }
+  const removeAssistantReference = (id) => setAssistantReferences((current) => current.filter((item) => item.id !== id))
+  const generateFromAssistantReferences = async (promptOverride = '', settingsOverride = null, chatBase = null) => {
+    const prompt = (typeof promptOverride === 'string' && promptOverride.trim() ? promptOverride : assistantInput).trim()
+    if (!prompt || !assistantReferences.length || assistantGenerating) return
+    if (!imageService?.configured) return alert('请先完成图像服务设置。')
+    const references = assistantReferences.map((item, index) => ({ ...item, role: index === 0 ? '本次修改的原图，保持用户未提及的内容不变' : (item.role || '补充参考图') }))
+    const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
+    const center = { x: -(viewportRef.current.scrollX || 0) + (boardRef.current?.clientWidth || 900) / (2 * zoom), y: -(viewportRef.current.scrollY || 0) + (boardRef.current?.clientHeight || 700) / (2 * zoom) }
+    setAssistantGenerating(true)
+    let canvasReferences
+    try {
+      canvasReferences = await Promise.all(references.map(async (reference, index) => {
+        const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = reference.dataURL })
+        const fileId = uid(), scale = Math.min(1, 520 / Math.max(image.naturalWidth, image.naturalHeight)), width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale)
+        const asset = await storeProjectAsset({ id: fileId, dataURL: reference.dataURL, name: reference.name || `助手参考图 ${index + 1}`, mimeType: reference.mimeType || 'image/png', kind: 'image', tags: ['助手参考图'] })
+        const file = { id: fileId, assetId: asset.assetId, dataURL: reference.dataURL, mimeType: reference.mimeType || 'image/png', created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+        const element = { id: uid(), type: 'image', x: Math.round(center.x - width / 2 + index * 36), y: Math.round(center.y - height / 2 + index * 36), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null, customData: { assistantReference: true } }
+        return { file, element }
+      }))
+    } catch (error) { setAssistantGenerating(false); return alert(`参考图转入画布失败：${errorMessage(error)}`) }
+    const sourceElement = canvasReferences[0].element
+    const constrainedPrompt = assistantMode === 'agent' ? `${AGENT_CONSTRAINED_EDIT_INSTRUCTION}\n\n${prompt}` : prompt
+    const node = { id: uid(), kind: 'prompt', sourceElementId: sourceElement.id, parentNodeId: null, x: sourceElement.x + sourceElement.width + 160, y: sourceElement.y, width: 620, height: 560, model: imageService.model || '当前生图模型', templateId: '', templateLabel: assistantMode === 'agent' ? 'Agent 受约束编辑' : '助手参考图生成', prompt: constrainedPrompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: references, generationEditImage: assistantMode === 'agent' ? references[0] : null, versionHistory: [], ...GENERATION_DEFAULTS, ...assistantGenerationSettings, ...(settingsOverride || {}), productConsistency: true }
+    recordNodeHistory()
+    const files = { ...sceneRef.current.files }
+    canvasReferences.forEach(({ file }) => { files[file.id] = file })
+    const elements = [...sceneRef.current.elements, ...canvasReferences.map(({ element }) => element)]
+    const nodes = [...(sceneRef.current.workflowNodes || []), node]
+    sceneRef.current = { ...sceneRef.current, elements, files, workflowNodes: nodes }
+    setWorkflowNodes(nodes); setSelectedNodeIds([node.id])
+    api.current?.addFiles(canvasReferences.map(({ file }) => file))
+    api.current?.updateScene({ elements, appState: { selectedElementIds: { [sourceElement.id]: true } } })
+    setSelected({ ...sourceElement, file: canvasReferences[0].file }); setSelectedCanvasIds([sourceElement.id]); setAssistantReferences([])
+    persist(elements, sceneRef.current.appState || emptyScene.appState, files, nodes)
+    const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
+    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - node.width / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
+    const user = { id: uid(), role: 'user', text: prompt, createdAt: Date.now(), nodeId: node.id }
+    saveChat([...(chatBase || chatMessages), user, { id: uid(), role: 'assistant', text: `已将讨论方案整理为最终提示词，并按 ${node.generationAspect} · ${node.generationQuality} · ${node.generationCount} 张启动生成。`, model: imageService.model, source: 'generation', createdAt: Date.now(), nodeId: node.id }])
+    try { await generatePreview(node, assistantMode === 'agent' ? { mode: 'quick-edit', editInstruction: constrainedPrompt, preserveSourceDimensions: true } : {}) }
+    finally { setAssistantGenerating(false) }
+  }
   const modifyCompositionPrompt = async () => {
     if (!canComposeGeneration || compositionPromptBusy) return
     if (!compositionReferences.length) return setCompositionPromptError('请先上传至少 1 张额外参考图，再让 AI 修改组合提示词。')
@@ -1288,7 +1369,18 @@ function App() {
     api.current?.updateScene({ elements, appState: { selectedElementIds: { [elementId]: true } } })
     setSelected({ ...element, file })
     persist(elements, current.appState || emptyScene.appState, files)
-    if (payload.prompt?.trim()) addPromptNode(payload.prompt, payload.model || '插件当前模型', 'reverse', element, { id: payload.templateId || '', label: payload.templateLabel || '插件当前模板' })
+    if (payload.schemaVersion === 2 && String(payload.sourceType || '').startsWith('blender_')) {
+      const camera = payload.camera || {}, lighting = payload.lighting || {}, render = payload.render || {}
+      const auxiliary = Object.entries(payload.auxiliaryImages || {}).filter(([, value]) => String(value || '').startsWith('data:image/')).slice(0, 3).map(([role, value]) => ({ id: uid(), name: `${role}.png`, role: role === 'depth' ? '深度结构约束' : role === 'normal' ? '世界法线约束' : '物体遮罩约束', dataURL: value }))
+      const prompt = payload.prompt?.trim() || '基于当前 Blender 场景生成高质量画面，保持主体布局、空间关系和构图参考。'
+      const node = { id: uid(), kind: 'blender', sourceElementId: element.id, parentNodeId: null, x: element.x + element.width + 150, y: element.y, width: 620, height: 650, model: 'Blender Bridge', templateId: '', templateLabel: payload.sourceType === 'blender_render' ? '正式渲染导入' : '摄像机视口导入', prompt, blenderBasePrompt: prompt, output: prompt, busy: false, status: 'completed', referenceImages: auxiliary, blenderMeta: { sceneName: payload.sceneName, blenderVersion: payload.blenderVersion, sourceType: payload.sourceType, camera, lighting, render }, lockCamera: false, lockLighting: false, lockProductOrientation: true, useStructurePasses: false, versionHistory: [], ...GENERATION_DEFAULTS, productConsistency: true }
+      node.prompt = blenderPromptForNode(node); node.output = node.prompt
+      const nodes = [...(current.workflowNodes || []), node]
+      sceneRef.current = { ...sceneRef.current, elements, files, workflowNodes: nodes }
+      setWorkflowNodes(nodes)
+      persist(elements, current.appState || emptyScene.appState, files, nodes)
+      setSelectedNodeIds([node.id]); requestAnimationFrame(() => focusWorkflowNode(node))
+    } else if (payload.prompt?.trim()) addPromptNode(payload.prompt, payload.model || '插件当前模型', 'reverse', element, { id: payload.templateId || '', label: payload.templateLabel || '插件当前模板' })
   }
   useEffect(() => {
     if (!window.__TAURI__) return undefined
@@ -1314,6 +1406,32 @@ function App() {
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+  }
+  const applyReferenceSceneToBlender = async () => {
+    if (!blenderReferencePair || blenderReferenceBusy) return
+    const { node, referenceFile } = blenderReferencePair
+    const originalPrompt = node.blenderBasePrompt || stripBlenderConstraintBlocks(node.prompt)
+    const history = node.prompt ? [...(node.versionHistory || []), { id: uid(), prompt: node.prompt, model: node.model, templateId: node.templateId, templateLabel: node.templateLabel, createdAt: Date.now() }].slice(-20) : (node.versionHistory || [])
+    setBlenderReferenceBusy(true)
+    updateWorkflowNode(node.id, { busy: true, status: 'running', error: '', versionHistory: history })
+    try {
+      const imageDataUrl = await compressForVision(referenceFile.dataURL)
+      const instruction = [
+        '把当前上传图片仅作为场景参考图进行分析，提取它的环境、空间布局、主体位置、构图、景别、镜头高度、透视、光线方向、色温、阴影、材质氛围与摄影风格。',
+        '参考图里的汽车、摩托车、人物或其他原主体不得成为最终主体，不得保留其品牌、车型和结构描述。',
+        '请把参考图中的原主体完整替换为原提示词所描述的当前 Blender 产品（本任务中通常是自行车或电助力自行车），保持当前产品的类型、结构、比例、颜色与关键外观特征。必须保留 Blender 产品图中车头与车尾、前轮与后轮的左右关系和当前可见侧面，禁止为了套用参考场景而水平翻转、镜像或掉头。',
+        '输出一段完整、连贯、可直接生图的中文提示词，不要解释过程，不要列步骤。场景和摄影语言以参考图为依据，产品事实以原提示词为依据。',
+      ].join('\n')
+      const result = await invoke('reverse_image_prompt', { imageDataUrl, templateId: node.templateId || selectedTemplateId || null, originalPrompt, instruction })
+      if (!result?.prompt?.trim()) throw new Error('AI 没有返回可用提示词')
+      const blenderBasePrompt = result.prompt.trim()
+      const prompt = blenderPromptForNode({ ...node, blenderBasePrompt, prompt: blenderBasePrompt })
+      updateWorkflowNode(node.id, { busy: false, status: 'completed', error: '', blenderBasePrompt, prompt, output: prompt, model: result.model || node.model, templateId: result.templateId || node.templateId, templateLabel: result.templateLabel || '参考场景适配' })
+      setSelectedNodeIds([node.id])
+      requestAnimationFrame(() => focusWorkflowNode({ ...node, prompt }))
+    } catch (error) {
+      updateWorkflowNode(node.id, { busy: false, status: 'failed', error: errorMessage(error, '参考场景反推失败，请重试') })
+    } finally { setBlenderReferenceBusy(false) }
   }
   const selectWorkflowNode = (id, additive = false) => {
     setSelectedNodeIds((current) => additive ? (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) : [id])
@@ -1405,6 +1523,17 @@ function App() {
     const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
     api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - node.width / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
     setSelectedNodeIds([node.id])
+  }
+  const focusGenerationResult = (message) => {
+    const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === message.nodeId)
+    if (!node) return
+    const generatedId = [...(node.generatedElementIds || [])].reverse().find((id) => sceneRef.current.elements.some((element) => element.id === id && !element.isDeleted))
+    const element = generatedId ? sceneRef.current.elements.find((item) => item.id === generatedId) : sceneRef.current.elements.find((item) => item.id === node.sourceElementId)
+    if (!element) return focusWorkflowNode(node)
+    const file = sceneRef.current.files[element.fileId]
+    api.current?.updateScene({ appState: { selectedElementIds: { [element.id]: true } } })
+    api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
+    setSelected({ ...element, file }); setSelectedCanvasIds([element.id]); setSelectedNodeIds([node.id])
   }
   const searchResults = canvasSearch.trim() ? workflowNodes.filter((node) => [node.prompt, node.output, node.instruction, node.model, node.templateLabel, node.workflowGroupName].some((value) => String(value || '').toLowerCase().includes(canvasSearch.trim().toLowerCase()))).slice(0, 20) : []
   useEffect(() => {
@@ -1718,8 +1847,49 @@ function App() {
         saveChat([...pending, { id: uid(), role: 'assistant', text: '已复制当前图片并打开 Pinterest 首页。点击搜索框右侧的 Lens 相机，选择上传图片后可直接粘贴（Ctrl+V）当前原图开始搜索；左键打开图片详情，右键选择“发送图片到阿男帮你推画布”即可把图片和来源网址送回当前画布。', source: 'image-search', createdAt: Date.now() }])
         return
       }
-      const generation = parseGenerationCommand(message, selectedWorkflowNode)
-      if (generation) {
+      const generation = parseGenerationCommand(message, selectedWorkflowNode || assistantGenerationSettings)
+      const agentGenerationRequested = assistantMode === 'agent' && generation && /(?:生成|生图|出图|开始做|开始生成|给我做|给我生成)/.test(message)
+      if (agentGenerationRequested) {
+        if (!imageService?.configured) throw new Error('请先完成图像服务设置。')
+        const transcript = [...chatMessages.slice(-12), user].map((item) => `${item.role === 'user' ? '用户' : 'Mimo'}：${item.text}`).join('\n')
+        const agentImage = assistantReferences[0]?.dataURL || (selectedWorkflowNode ? sourceFileForNode(selectedWorkflowNode)?.dataURL : selectedFile?.dataURL)
+        const result = await invoke('prompt_assistant', { message: `以下是本轮创意讨论记录：\n${transcript}\n\n用户现在要求开始生成 ${generation.count} 个方案。请综合全部讨论，整理出一段完整、明确、可直接交给图像生成模型的中文提示词。${agentImage ? '这是原图约束编辑：第一张图片是不可随意重做的编辑底稿，只描述用户明确要求的变化，并明确保持原图产品型号、车架结构、部件、比例、配色、朝向、镜头和未提及区域不变；不得把自行车改成滑板车、摩托车或其他车型。' : '这是无原图的自由创作。'}只输出最终提示词，不要解释，不要列步骤。`, contextPrompt: assistantContext || null, imageDataUrl: agentImage ? await compressForVision(agentImage) : null })
+        const finalPrompt = result.text.trim()
+        if (!finalPrompt) throw new Error('Mimo 没有整理出可用的最终提示词。')
+        const discussionReply = { id: uid(), role: 'assistant', text: finalPrompt, model: result.model, isPrompt: true, source: 'agent-final', linkedToNode: false, templateLabel: 'Agent 最终方案', createdAt: Date.now(), nodeId: selectedWorkflowNode?.id || null }
+        const discussed = [...pending, discussionReply]
+        saveChat(discussed)
+        const settings = { generationAspect: generation.aspect, generationQuality: generation.quality, generationCount: generation.count }
+        if (assistantReferences.length) {
+          await generateFromAssistantReferences(finalPrompt, settings, discussed)
+          return
+        }
+        let generationNode = selectedWorkflowNode
+        const editSourceFile = selectedFile?.dataURL ? selectedFile : selectedWorkflowNode ? sourceFileForNode(selectedWorkflowNode) : null
+        const selectedEditImage = editSourceFile?.dataURL ? { id: selected?.id || uid(), dataURL: editSourceFile.dataURL, name: 'Agent 原图编辑底稿', mimeType: editSourceFile.mimeType || 'image/png', role: '原图底稿，只允许修改明确点名内容' } : null
+        if (generationNode) {
+          const prompt = selectedEditImage ? `${AGENT_CONSTRAINED_EDIT_INSTRUCTION}\n\n${finalPrompt}` : finalPrompt
+          updateWorkflowNode(generationNode.id, { prompt, output: generationNode.kind === 'modify' || generationNode.kind === 'skill' ? prompt : generationNode.output, generationEditImage: selectedEditImage, productConsistency: !!selectedEditImage || generationNode.productConsistency, ...settings })
+          generationNode = { ...generationNode, prompt, generationEditImage: selectedEditImage, productConsistency: !!selectedEditImage || generationNode.productConsistency, ...settings }
+        } else if (selected?.type === 'image') {
+          const prompt = `${AGENT_CONSTRAINED_EDIT_INSTRUCTION}\n\n${finalPrompt}`
+          const nodeId = addPromptNode(prompt, result.model || 'Mimo Agent', 'reverse', selected, { id: 'agent', label: 'Agent 受约束编辑' })
+          generationNode = (sceneRef.current.workflowNodes || []).find((node) => node.id === nodeId)
+          if (generationNode) { updateWorkflowNode(generationNode.id, { ...settings, generationEditImage: selectedEditImage, productConsistency: true }); generationNode = { ...generationNode, ...settings, generationEditImage: selectedEditImage, productConsistency: true } }
+        }
+        if (!generationNode) {
+          const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
+          const generationAspect = generation.aspect || assistantGenerationSettings.generationAspect
+          const generationQuality = generation.quality || assistantGenerationSettings.generationQuality
+          const generationCount = generation.count || assistantGenerationSettings.generationCount
+          generationNode = { id: uid(), kind: 'prompt', sourceElementId: null, parentNodeId: null, x: -(viewportRef.current.scrollX || 0) + 180 / zoom, y: -(viewportRef.current.scrollY || 0) + 160 / zoom, width: 620, height: 560, model: result.model || 'Mimo Agent', templateId: 'agent', templateLabel: 'Agent 最终方案', prompt: finalPrompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: [], versionHistory: [], ...GENERATION_DEFAULTS, generationAspect, generationQuality, generationCount, productConsistency: false }
+          const nodes = [...(sceneRef.current.workflowNodes || []), generationNode]
+          sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setSelectedNodeIds([generationNode.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+        }
+        generatePreview(generationNode, selectedEditImage ? { mode: 'quick-edit', editInstruction: generationNode.prompt, preserveSourceDimensions: true } : {})
+        return
+      }
+      if (generation && assistantMode !== 'agent') {
         if (!imageService?.configured) throw new Error('请先完成图像服务设置。')
         let generationNode = selectedWorkflowNode
         if (!generationNode) {
@@ -1750,7 +1920,9 @@ function App() {
         } else if (selected?.type === 'image') nodeId = addPromptNode(result.prompt, result.model, 'reverse', selected, { id: result.templateId, label: result.templateLabel })
         saveChat([...pending, { id: uid(), role: 'assistant', text: result.prompt, model: result.model, isPrompt: true, source: 'reverse', linkedToNode: Boolean(nodeId), templateId: result.templateId, templateLabel: result.templateLabel, createdAt: Date.now(), nodeId }])
       } else {
-        const result = await invoke('prompt_assistant', { message, contextPrompt: assistantContext || null, imageDataUrl })
+        const agentTranscript = assistantMode === 'agent' ? [...chatMessages.slice(-12), user].map((item) => `${item.role === 'user' ? '用户' : 'Mimo'}：${item.text}`).join('\n') : message
+        const assistantImage = assistantMode === 'agent' && assistantReferences[0]?.dataURL ? await compressForVision(assistantReferences[0].dataURL) : imageDataUrl
+        const result = await invoke('prompt_assistant', { message: assistantMode === 'agent' ? `请作为创意 Agent 延续下面的讨论。先和用户沟通、澄清和完善想法；除非用户明确要求生成/出图/方案，否则不要触发生图，也不要擅自宣布已经生图。\n\n${agentTranscript}` : message, contextPrompt: assistantContext || null, imageDataUrl: assistantImage })
         saveChat([...pending, { id: uid(), role: 'assistant', text: result.text, model: result.model, isPrompt: result.isPrompt, source: result.isPrompt ? 'assistant-edit' : 'assistant', linkedToNode: false, templateLabel: result.isPrompt ? '助手修改版本' : '', createdAt: Date.now(), nodeId: selectedWorkflowNode?.id || null }])
       }
     } catch (error) { saveChat([...pending, { id: uid(), role: 'error', text: String(error), createdAt: Date.now() }]) }
@@ -1801,7 +1973,11 @@ function App() {
     const element = { id: elementId, type: 'image', x: node.x + node.width + 140 + (resultIndex % 2) * (width + 40), y: node.y + Math.floor(resultIndex / 2) * (height + 40), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null, customData: { promptNodeId: node.id, prompt: node.kind === 'modify' ? (node.output || node.prompt) : node.prompt, generation: taskMeta } }
     const files = { ...sceneRef.current.files, [fileId]: file }, elements = [...sceneRef.current.elements, element]
     sceneRef.current = { ...sceneRef.current, files, elements }; api.current?.addFiles([file]); api.current?.updateScene({ elements }); persist(elements, sceneRef.current.appState || emptyScene.appState, files)
-    if (source) { const currentNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; updateWorkflowNode(node.id, { generatedElementIds: [...(currentNode.generatedElementIds || []), elementId], generationModel: taskMeta.model || imageService.model }) }
+    const currentNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node
+    updateWorkflowNode(node.id, { generatedElementIds: [...(currentNode.generatedElementIds || []), elementId], generationModel: taskMeta.model || imageService.model })
+    api.current?.updateScene({ appState: { selectedElementIds: { [elementId]: true } } })
+    api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
+    setSelected({ ...element, file }); setSelectedCanvasIds([elementId]); setSelectedNodeIds([node.id])
   }
   const cancelGeneration = async (node) => {
     const current = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)
@@ -1874,7 +2050,7 @@ function App() {
       ? node
       : { ...node, generationMultiAngleEnabled: false, generationBacksideReference: null, generationEditImage: null, generationEditMaskBoxes: null }
     const basePrompt = generationNode.kind === 'modify' ? (generationNode.output || generationNode.prompt) : generationNode.prompt; if (!basePrompt?.trim()) return
-    const keepProduct = generationNode.productConsistency !== false
+    const keepProduct = generationNode.kind === 'blender' || generationNode.productConsistency !== false
     const multiAngleInstruction = multiAngleRun ? buildMultiAngleInstruction(generationNode) : ''
       const prompt = [keepProduct ? PRODUCT_CONSISTENCY_INSTRUCTION : '', basePrompt, editInstruction, multiAngleInstruction].filter(Boolean).join('\n\n')
       const quality = generationNode.generationQuality || GENERATION_DEFAULTS.generationQuality, aspect = generationNode.generationAspect || GENERATION_DEFAULTS.generationAspect
@@ -1897,9 +2073,9 @@ function App() {
       const replacementReference = replacementReferences[0] || null
       const sourceImage = sourceFileForNode(generationNode)
       const explicitEditImage = (multiAngleRun || quickEditRun) && generationNode.generationEditImage?.dataURL ? generationNode.generationEditImage : null
-      const editImage = explicitEditImage || replacementReference || (keepProduct ? sourceImage : null)
+      const editImage = explicitEditImage || (generationNode.kind === 'blender' ? sourceImage : replacementReference || (keepProduct ? sourceImage : null))
       if (generationNode.kind === 'modify' && !replacementReference && !quickEditRun) throw new Error('请添加产品参考图；生成不会使用原场景图')
-      const referenceRoles = requestProductReferences.map((item, index) => `产品参考图${index + 1}用途：${item.role || '产品外观'}`).join('；')
+      const referenceRoles = requestProductReferences.map((item, index) => `${generationNode.kind === 'blender' ? '结构参考图' : '产品参考图'}${index + 1}用途：${item.role || '产品外观'}`).join('；')
       const backsideReferenceRole = backsideReference ? '【背面参考图已上传】本次请求的最后一张参考图就是当前产品的背面/另一面。请把它视为同一型号的结构事实，用来补全目标视角中可见的背面，不得把它当成另一款产品或场景风格参考。' : ''
       const editRole = explicitEditImage
         ? multiAngleRun
@@ -1908,10 +2084,12 @@ function App() {
         : ''
       const finalAnglePriority = multiAngleRun ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(generationNode.generationRotate)}；目标垂直机位：${describeCameraTilt(generationNode.generationTilt)}；${describeCameraScale(generationNode.generationScale)}${describeAngleEvidence(generationNode)}如果原图是中远景而目标是近景，输出必须明显收紧取景，让产品成为画面主体。` : ''
       const quickEditPriority = quickEditRun ? '【快速编辑最高优先级：原图局部编辑】这是在当前图片上做局部修改，不是重新生成一张新图。上面的局部编辑指令是唯一需要改变的内容，不需要再次改写或扩展成完整场景提示词；只允许改变用户明确点名的区域或对象。未提及的主体身份、人物动作、产品结构、背景、天空以外的环境、构图、镜头、光线方向、文字和画面比例全部锁定，必须与原图保持一致。若用户只修改天空，就只编辑天空及其自然反射，严禁重做人物、产品、地面和背景；禁止额外发挥、换场景、改动作或改变取景。' : ''
+      const blenderOrientationPriority = generationNode.kind === 'blender' && generationNode.lockProductOrientation !== false ? '【Blender 产品朝向最高优先级】输入的 Blender RGB 渲染图是产品姿态的唯一依据。必须保持车头、车尾、前轮、后轮在画面中的左右关系和当前可见侧面；严禁水平翻转、镜像、掉头、交换前后轮位置或生成相反侧视角。即使场景参考或构图描述与此冲突，也必须以 Blender 原图的产品朝向为准。' : ''
       const generationPrompt = [
         prompt,
+        blenderOrientationPriority,
         editRole,
-        referenceRoles ? `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
+        referenceRoles ? generationNode.kind === 'blender' ? `【Blender 结构参考】${referenceRoles}。这些辅助图只约束深度、表面方向和物体边界，不得把灰度或法线颜色当成画面颜色。` : `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
         backsideReferenceRole,
         multiAngleRun && explicitEditImage ? `【视角变体最终覆盖指令】必须实际改变摄像机位置，并让人物、产品、背景透视和遮挡关系同步改变；不能只复用原图构图，也不能只翻转产品。原提示词中关于旧视角、旧机位、旧景别和旧构图的描述仅作为场景事实，不得覆盖当前目标角度。${generationNode.generationActionLock !== false ? '人物当前动作是锁定项，只能重新投影，不能改动作。' : ''}` : '',
         finalAnglePriority,
@@ -2095,6 +2273,7 @@ function App() {
         <div className="workflow-history-bar"><button title="撤销节点操作" disabled={!nodeHistoryRef.current.past.length} onClick={() => restoreNodeHistory('undo')}>↶</button><button title="重做节点操作" disabled={!nodeHistoryRef.current.future.length} onClick={() => restoreNodeHistory('redo')}>↷</button></div>
         <button className="fit-canvas" style={{ position: 'absolute', zIndex: 6, right: 'calc(min(340px, 42%) + 24px)', top: 10, height: 34, border: '1px solid #d4cce7', borderRadius: 9, background: '#fff', color: '#393445', padding: '0 11px', cursor: 'pointer', whiteSpace: 'nowrap' }} onMouseDown={(event) => event.preventDefault()} onClick={() => api.current?.scrollToContent(sceneRef.current.elements, { fitToViewport: true, viewportZoomFactor: 0.85 })}>查看全部</button>
         {(selectedNodeIds.length > 0 || canComposeGeneration) && <div className="workflow-selection-bar" style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}>{selectedNodeIds.length > 0 && <><b>已选 {selectedNodeIds.length} 个节点</b><button onClick={duplicateSelectedWorkflowNodes}>复制</button><button onClick={groupSelectedWorkflowNodes}>分组</button><button onClick={renameSelectedGroup}>改名</button><button onClick={ungroupSelected}>解散</button><button onClick={collapseSelected}>折叠/展开</button><button onClick={connectSelectedToImage}>连接图片</button><button onClick={() => reorderSelected(false)}>置底</button><button onClick={() => reorderSelected(true)}>置顶</button><button onClick={deleteSelectedWorkflowNodes}>删除</button></>}{canComposeGeneration && <button className="primary" onClick={generateComposition}>用提示词＋产品图生图</button>}</div>}
+        {blenderReferencePair && <div className="workflow-selection-bar" style={{ top: 112, maxWidth: 'calc(100% - 32px)' }}><b>已选 Blender 产品图＋场景参考图</b><button className="primary" onClick={applyReferenceSceneToBlender} disabled={blenderReferenceBusy}>{blenderReferenceBusy ? '正在反推并适配产品…' : '以参考图反推并写入 Blender 卡片'}</button></div>}
         <Excalidraw key={`${activeProjectId}:${canvasInstanceVersion}`} theme={canvasTheme === 'light' ? 'light' : 'dark'} excalidrawAPI={(instance) => {
           api.current = instance
           // initialData 会先被 Excalidraw 内部默认状态覆盖一次；实例就绪后的下一帧再同步，
@@ -2202,7 +2381,7 @@ function App() {
          {quickEditOpen && selectedImageToolbarPosition && <QuickEditPopover value={quickEditText} onChange={setQuickEditText} onSubmit={runQuickEdit} onClose={() => !quickEditBusy && setQuickEditOpen(false)} busy={quickEditBusy} error={quickEditError} position={quickEditPosition} />}
          {multiAngleOpen && <MultiAngleDialog value={assistantGenerationValue} previewUrl={selectedFile?.dataURL || ''} onClose={() => setMultiAngleOpen(false)} onUse={applyMultiAngleAndGenerate} />}
       </section>
-      <aside className={`detail assistant-detail ${rightTab === 'assistant' ? 'assistant-workbench' : ''}`} style={{ flexBasis: detailWidth }}>
+      <aside className={`detail assistant-detail ${rightTab === 'assistant' ? 'assistant-workbench' : ''}`} style={{ flexBasis: detailWidth, '--assistant-font-scale': assistantFontScale }}>
         <div className="detail-resizer" onPointerDown={beginDetailResize} onPointerMove={resizeDetail} onPointerUp={endDetailResize} onPointerCancel={endDetailResize} title="拖动调整侧栏宽度" />
         <header className="detail-header">
           <nav className="detail-tabs"><button className="active">提示词助手</button></nav>
@@ -2226,10 +2405,17 @@ function App() {
           </section>
           <div className="chat-list">
             {selectedWorkflowNode && assistantContext && <article className="current-node-card"><header><b>当前节点提示词</b><span className="sync-badge">实时同步</span></header><div className="result-meta"><span>{selectedWorkflowNode.model || aiStatus?.model || '当前模型'}</span><span>{selectedWorkflowNode.templateLabel || assistantTemplate}</span><span>V{assistantVersionCount}</span></div><p>{assistantContext}</p><footer><button onClick={() => navigator.clipboard.writeText(assistantContext)}>复制当前提示词</button></footer></article>}
-            {chatMessages.map((message) => <article key={message.id} className={`${message.role} ${message.role === 'assistant' && message.isPrompt ? 'prompt-card' : ''}`}><header><b>{message.role === 'user' ? '你' : message.role === 'error' ? '处理失败' : message.source === 'reverse' ? '同步反推结果' : message.isPrompt ? '助手修改版本' : message.model || '助手'}</b><time>{new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>{message.role === 'assistant' && message.isPrompt && <div className="result-meta"><span>{message.model || aiStatus?.model || '当前模型'}</span><span>{message.templateLabel || '助手修改版本'}</span>{message.linkedToNode && <span>已同步节点</span>}</div>}<p>{message.text}</p>{message.role === 'assistant' && message.isPrompt && <footer><button className="primary" onClick={() => applyAssistantResult(message)}>写入节点</button><button onClick={() => applyAssistantResult(message, true)}>保存新版本</button><button onClick={() => generateAssistantMessagePreview(message)} disabled={!selectedWorkflowNode && !selectedFile}>{selectedFile ? '按当前产品图生成预览' : '生成预览'}</button><button onClick={() => navigator.clipboard.writeText(message.text)}>复制</button></footer>}</article>)}
+            {chatMessages.map((message) => <article key={message.id} className={`${message.role} ${message.role === 'assistant' && message.isPrompt ? 'prompt-card' : ''}`}><header><b>{message.role === 'user' ? '你' : message.role === 'error' ? '处理失败' : message.source === 'reverse' ? '同步反推结果' : message.isPrompt ? '助手修改版本' : message.model || '助手'}</b><time>{new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>{message.role === 'assistant' && message.isPrompt && <div className="result-meta"><span>{message.model || aiStatus?.model || '当前模型'}</span><span>{message.templateLabel || '助手修改版本'}</span>{message.linkedToNode && <span>已同步节点</span>}</div>}<p>{message.text}</p>{message.role === 'assistant' && message.isPrompt && <footer><button className="primary" onClick={() => applyAssistantResult(message)}>写入节点</button><button onClick={() => applyAssistantResult(message, true)}>保存新版本</button><button onClick={() => generateAssistantMessagePreview(message)} disabled={!selectedWorkflowNode && !selectedFile}>{selectedFile ? '按当前产品图生成预览' : '生成预览'}</button><button onClick={() => navigator.clipboard.writeText(message.text)}>复制</button></footer>}{message.role === 'assistant' && message.source === 'generation' && message.nodeId && <footer className="generation-message-actions"><button className="primary" onClick={() => focusGenerationResult(message)}>定位到画布</button></footer>}</article>)}
           </div>
-          <footer className="assistant-composer"><div className="composer-context"><span>{selectedFile ? '图片 ×1' : '未关联图片'}</span><span>{selectedWorkflowNode ? `${assistantContextTitle} · V${assistantVersionCount}` : '未关联节点'}</span></div><div className="composer-input"><textarea value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendAssistant() }} placeholder="描述你想分析、反推或修改的内容…" /><button className="send-button" title="发送（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || !assistantInput.trim()}>{assistantBusy ? '…' : '➤'}</button></div></footer>
+          <footer className="assistant-composer">
+            <div className="assistant-mode-switch"><button className={assistantMode === 'image' ? 'active' : ''} onClick={() => { setAssistantMode('image'); localStorage.setItem('prompt-vault-assistant-mode', 'image') }}>纯生图</button><button className={assistantMode === 'agent' ? 'active' : ''} onClick={() => { setAssistantMode('agent'); localStorage.setItem('prompt-vault-assistant-mode', 'agent') }}>Agent 沟通</button><small>{assistantMode === 'agent' ? '先与 Mimo 讨论；明确说生成方案后才调用香蕉模型' : '按当前输入直接调用香蕉模型生成'}</small></div>
+            <div className="composer-context"><span>{assistantReferences.length ? `参考图 ×${assistantReferences.length}` : selectedFile ? '画布图片 ×1' : '未关联图片'}</span><span>{selectedWorkflowNode ? `${assistantContextTitle} · V${assistantVersionCount}` : assistantMode === 'agent' ? 'Mimo Agent' : '自由创作'}</span></div>
+            {assistantReferences.length > 0 && <div className="assistant-reference-strip">{assistantReferences.map((image, index) => <figure key={image.id}><img src={image.dataURL} alt={image.name || `参考图 ${index + 1}`} /><span>{index === 0 ? '原图' : `参考 ${index + 1}`}</span><button type="button" title="移除参考图" onClick={() => removeAssistantReference(image.id)}>×</button></figure>)}</div>}
+            <div className="composer-input"><textarea value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) assistantMode === 'agent' ? sendAssistant() : assistantReferences.length ? generateFromAssistantReferences() : sendAssistant() }} placeholder={assistantMode === 'agent' ? '和 Mimo 沟通你的想法；满意后说“生成 3 个方案”…' : assistantReferences.length ? '说说你想修改什么，未提及的内容会尽量保持不变…' : '描述你想生成的画面…'} /></div>
+            <div className="assistant-composer-toolbar"><button type="button" className="assistant-upload-reference" onClick={() => assistantReferenceInput.current?.click()} disabled={assistantReferences.length >= 8}>上传参考图</button><input ref={assistantReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addAssistantReferences(event.target.files); event.target.value = '' }} /><label>尺寸<select value={assistantGenerationSettings.generationAspect} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationAspect: event.target.value }))}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationSettings.generationQuality} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationQuality: event.target.value }))}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationSettings.generationCount} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationCount: Number(event.target.value) }))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>{assistantMode === 'agent' ? <button type="button" className="assistant-send-text" title="发送给 Mimo（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || assistantGenerating || !assistantInput.trim()}>{assistantBusy || assistantGenerating ? '处理中…' : '发送给 Mimo'}</button> : assistantReferences.length ? <button type="button" className="assistant-generate-reference" title="按参考图生成到画布" onClick={() => generateFromAssistantReferences()} disabled={assistantGenerating || !assistantInput.trim()}>{assistantGenerating ? '生成中…' : '生成到画布'}</button> : <button type="button" className="assistant-send-text" title="发送（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || !assistantInput.trim()}>{assistantBusy ? '发送中…' : '发送'}</button>}</div>
+          </footer>
         </section>}
+        {rightTab === 'service' && <section className="assistant-font-setting"><label><span>提示词助手字体大小</span><b>{Math.round(assistantFontScale * 100)}%</b></label><input type="range" min="0.85" max="1.5" step="0.05" value={assistantFontScale} onChange={(event) => { const value = Number(event.target.value); setAssistantFontScale(value); localStorage.setItem('prompt-vault-assistant-font-scale', String(value)) }} /><small>拖动后立即预览，设置会自动保留。</small></section>}
         {rightTab === 'service' && <section className="image-service-form"><h3>图像服务设置</h3><p>独立于插件模型配置，API Key 仅保存在本机后端。</p>{[['baseUrl','中转站地址'],['apiKey',imageService.hasApiKey ? 'API Key（留空保持原密钥）' : 'API Key'],['model','生图模型'],['generatePath','文生图路径'],['editPath','图生图路径'],['statusPath','任务查询路径（用 {taskId}）'],['cancelPath','取消任务路径（用 {taskId}）'],['defaultSize','默认尺寸']].map(([key,label]) => <label key={key}>{label}<input type={key === 'apiKey' ? 'password' : 'text'} value={imageService[key] || ''} onChange={(event) => setImageService({ ...imageService, [key]: event.target.value })} /></label>)}<section className="download-directory"><label>原图下载目录<input title={imageService.downloadDirectory || '默认：下载/PromptVault 原图'} value={imageService.downloadDirectory || '默认：下载/PromptVault 原图'} readOnly /></label><div><button disabled={directoryDialogBusy} onClick={chooseDownloadDirectory}>{directoryDialogBusy ? '正在选择…' : '选择文件夹'}</button><button disabled={directoryDialogBusy} onClick={resetDownloadDirectory}>恢复默认</button></div></section><label>接口模式<select value={imageService.mode || 'openai'} onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="openai">OpenAI 兼容 / 通用 JSON</option></select></label><div className="service-actions"><button className="primary" onClick={saveImageService}>保存设置</button><button onClick={testImageService}>测试连接</button></div>{imageServiceMessage && <p className="service-message">{imageServiceMessage}</p>}</section>}
       </aside>
     </main>
