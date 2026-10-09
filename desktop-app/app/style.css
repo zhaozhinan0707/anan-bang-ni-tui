@@ -48,6 +48,10 @@
 .detail .detail-settings{flex:0 0 36px;width:36px;height:36px;margin:0;padding:0;font-size:16px;background:transparent}
 .detail .detail-settings.active{background:#3d2b69;border-color:#7658ca}
 .image-inspector,.image-service-form{height:calc(100% - 58px);overflow:auto;padding:16px}
+.assistant-detail.service-view{display:flex;flex-direction:column}
+.assistant-detail.service-view .detail-header{flex:none}
+.service-settings-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.service-settings-scroll .image-service-form{height:auto;overflow:visible;padding-top:0}
 .assistant-workbench{background:#1b1c22}
 .prompt-assistant{height:calc(100% - 58px);display:flex;flex-direction:column;gap:0;min-height:0}
 .assistant-title{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 14px}

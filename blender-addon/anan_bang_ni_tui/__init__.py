@@ -1,4 +1,4 @@
-bl_info = {"name":"阿男帮你推 · 画布桥接","author":"阿男帮你推","version":(1,3,9),"blender":(4,2,0),"location":"3D View > Sidebar > 阿男帮你推","category":"3D View"}
+bl_info = {"name":"阿男帮你推 · 画布桥接","author":"阿男帮你推","version":(1,4,0),"blender":(4,2,0),"location":"3D View > Sidebar > 阿男帮你推","category":"3D View"}
 import base64,json,os,tempfile,threading,time,urllib.error,urllib.request,uuid,bpy
 from bpy.props import BoolProperty,StringProperty
 from bpy.types import Operator,Panel,PropertyGroup
