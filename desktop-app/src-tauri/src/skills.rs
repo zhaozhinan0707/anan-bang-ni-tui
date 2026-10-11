@@ -12,6 +12,21 @@ pub struct SkillTrainingExample {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillRevision {
+    pub version: u32,
+    pub saved_at: i64,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub requires: Vec<String>,
+    pub instruction: String,
+    pub output_type: String,
+    pub training_examples: Vec<SkillTrainingExample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillDefinition {
     pub id: String,
     pub name: String,
@@ -29,6 +44,9 @@ pub struct SkillDefinition {
     /// Project-level examples are textual, deliberately excluding image Base64 data.
     /// They provide reusable workflow guidance without bloating the local Skill file.
     #[serde(default)] pub training_examples: Vec<SkillTrainingExample>,
+    #[serde(default)] pub source: String,
+    #[serde(default)] pub scope_project_id: String,
+    #[serde(default)] pub revisions: Vec<SkillRevision>,
 }
 
 fn version_one() -> u32 { 1 }
@@ -39,7 +57,22 @@ pub struct SkillState { pub items: Arc<Mutex<Vec<SkillDefinition>>>, pub path: P
 fn now() -> i64 { chrono::Utc::now().timestamp_millis() }
 
 fn built_in(id: &str, name: &str, description: &str, category: &str, requires: &[&str], instruction: &str, output_type: &str, tags: &[&str]) -> SkillDefinition {
-    SkillDefinition { id: id.into(), name: name.into(), description: description.into(), category: category.into(), requires: requires.iter().map(|v| (*v).into()).collect(), instruction: instruction.into(), output_type: output_type.into(), tags: tags.iter().map(|v| (*v).into()).collect(), favorite: false, built_in: true, version: 1, last_used_at: 0, updated_at: now(), training_examples: vec![] }
+    SkillDefinition { id: id.into(), name: name.into(), description: description.into(), category: category.into(), requires: requires.iter().map(|v| (*v).into()).collect(), instruction: instruction.into(), output_type: output_type.into(), tags: tags.iter().map(|v| (*v).into()).collect(), favorite: false, built_in: true, version: 1, last_used_at: 0, updated_at: now(), training_examples: vec![], source: "builtin".into(), scope_project_id: String::new(), revisions: vec![] }
+}
+
+fn revision(skill: &SkillDefinition) -> SkillRevision {
+    SkillRevision { version: skill.version, saved_at: skill.updated_at, name: skill.name.clone(), description: skill.description.clone(), category: skill.category.clone(), tags: skill.tags.clone(), requires: skill.requires.clone(), instruction: skill.instruction.clone(), output_type: skill.output_type.clone(), training_examples: skill.training_examples.clone() }
+}
+
+fn content_changed(old: &SkillDefinition, new: &SkillDefinition) -> bool {
+    let before = serde_json::to_value(revision(old)).ok();
+    let after = serde_json::to_value(revision(new)).ok();
+    if let (Some(mut before), Some(mut after)) = (before, after) {
+        before.as_object_mut().map(|v| { v.remove("version"); v.remove("savedAt"); });
+        after.as_object_mut().map(|v| { v.remove("version"); v.remove("savedAt"); });
+        return before != after;
+    }
+    true
 }
 
 fn defaults() -> Vec<SkillDefinition> { vec![
@@ -81,21 +114,36 @@ pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefin
         example.summary = example.summary.trim().to_string();
         (!example.project_name.is_empty() && !example.summary.is_empty()).then_some(example)
     }).take(20).collect();
+    if input.source.len() > 200 { input.source.truncate(200); }
+    if input.scope_project_id.len() > 100 { return Err("项目范围标识过长".into()); }
     input.updated_at = now();
     let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
-    if let Some(index) = items.iter().position(|item| item.id == input.id) { input.version = items[index].version.saturating_add(1); input.built_in = items[index].built_in; items[index] = input.clone(); }
-    else { input.version = 1; input.built_in = false; items.push(input.clone()); }
+    if let Some(index) = items.iter().position(|item| item.id == input.id) {
+        let old = &items[index];
+        let changed = content_changed(old, &input);
+        input.version = old.version.saturating_add(u32::from(changed));
+        input.built_in = old.built_in;
+        input.source = if old.source.is_empty() { if old.built_in { "builtin" } else { "local" }.into() } else { old.source.clone() };
+        input.revisions = old.revisions.clone();
+        if changed { input.revisions.push(revision(old)); input.revisions = input.revisions.into_iter().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect(); }
+        items[index] = input.clone();
+    } else {
+        input.version = 1; input.built_in = false;
+        if input.source.is_empty() { input.source = "local".into(); }
+        input.revisions.clear();
+        items.push(input.clone());
+    }
     drop(items); persist(state); Ok(input)
 }
 
 pub fn remove(state: &SkillState, id: &str) -> Result<(), String> { let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let before = items.len(); items.retain(|item| item.id != id); if before == items.len() { return Err("未找到要删除的 Skill".into()); } drop(items); persist(state); Ok(()) }
 pub fn touch(state: &SkillState, id: &str) { if let Ok(mut items) = state.items.lock() { if let Some(item) = items.iter_mut().find(|item| item.id == id) { item.last_used_at = now(); } } persist(state); }
-pub fn import(state: &SkillState, raw: &str) -> Result<usize, String> { let mut input: Vec<SkillDefinition> = serde_json::from_str(raw).or_else(|_| serde_json::from_str::<SkillDefinition>(raw).map(|item| vec![item])).map_err(|_| "Skill 导入文件格式无效")?; let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let mut added = 0; for mut item in input.drain(..).take(100) { if item.name.trim().is_empty() || item.instruction.trim().is_empty() { continue; } item.id = uuid::Uuid::new_v4().to_string(); item.built_in = false; item.favorite = false; item.version = 1; item.updated_at = now(); if items.iter().any(|current| current.name == item.name) { item.name = format!("{}（导入）", item.name); } items.push(item); added += 1; } drop(items); persist(state); Ok(added) }
+pub fn import(state: &SkillState, raw: &str) -> Result<usize, String> { let mut input: Vec<SkillDefinition> = serde_json::from_str(raw).or_else(|_| serde_json::from_str::<SkillDefinition>(raw).map(|item| vec![item])).map_err(|_| "Skill 导入文件格式无效")?; let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let mut added = 0; for mut item in input.drain(..).take(100) { if item.name.trim().is_empty() || item.instruction.trim().is_empty() { continue; } item.id = uuid::Uuid::new_v4().to_string(); item.built_in = false; item.favorite = false; item.version = 1; item.source = "json-import".into(); item.scope_project_id.clear(); item.revisions.clear(); item.updated_at = now(); if items.iter().any(|current| current.name == item.name) { item.name = format!("{}（导入）", item.name); } items.push(item); added += 1; } drop(items); persist(state); Ok(added) }
 pub fn export(state: &SkillState, ids: &[String]) -> Result<String, String> { let items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let chosen: Vec<_> = items.iter().filter(|item| ids.is_empty() || ids.contains(&item.id)).cloned().collect(); serde_json::to_string_pretty(&chosen).map_err(|error| error.to_string()) }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SkillRunRequest { pub skill_id: String, #[serde(default)] pub context_prompt: Option<String>, #[serde(default)] pub image_data_url: Option<String>, #[serde(default)] pub context_summary: String }
+pub struct SkillRunRequest { pub skill_id: String, #[serde(default)] pub project_id: String, #[serde(default)] pub context_prompt: Option<String>, #[serde(default)] pub image_data_url: Option<String>, #[serde(default)] pub context_summary: String }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +151,7 @@ pub struct SkillRunResult { pub text: String, pub model: String, pub skill: Skil
 
 pub async fn run(state: &SkillState, ai_state: &crate::ai::AiState, request: SkillRunRequest) -> Result<SkillRunResult, String> {
     let skill = state.items.lock().ok().and_then(|items| items.iter().find(|item| item.id == request.skill_id).cloned()).ok_or("未找到该 Skill")?;
+    if !skill.scope_project_id.is_empty() && skill.scope_project_id != request.project_id { return Err("此 Skill 仅在所属项目中可用".into()); }
     let context = request.context_prompt.unwrap_or_default();
     // Bound example payload so a large project library cannot slow down or exceed
     // the configured model context. The complete local example remains preserved.
@@ -111,4 +160,27 @@ pub async fn run(state: &SkillState, ai_state: &crate::ai::AiState, request: Ski
     let result = crate::ai::assistant(ai_state, message, (!context.trim().is_empty()).then_some(context), request.image_data_url).await?;
     touch(state, &skill.id);
     Ok(SkillRunResult { text: result.text, model: result.model, skill })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_skills_load_without_history_or_source() {
+        let old = serde_json::json!({"id":"legacy", "name":"旧技能", "instruction":"保持产品外观"});
+        let skill: SkillDefinition = serde_json::from_value(old).unwrap();
+        assert!(skill.revisions.is_empty());
+        assert!(skill.scope_project_id.is_empty());
+    }
+
+    #[test]
+    fn favorite_does_not_create_new_content_version() {
+        let original = built_in("test", "测试", "", "", &["image"], "原指令", "prompt", &[]);
+        let mut favorite = original.clone();
+        favorite.favorite = true;
+        assert!(!content_changed(&original, &favorite));
+        favorite.instruction = "新指令".into();
+        assert!(content_changed(&original, &favorite));
+    }
 }

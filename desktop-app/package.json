@@ -1,24 +1,28 @@
 {
   "name": "prompt-vault-desktop",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "阿男帮你推 · Tauri 2 桌面应用（纯静态前端，无构建步骤）",
   "scripts": {
     "dev": "vite",
     "build": "vite build && tauri build",
     "build:web": "vite build",
     "preview": "vite preview",
-  "publish:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-update.ps1"
+    "publish:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish-update.ps1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@vitejs/plugin-react": "^6.1.1",
+    "@xmldom/xmldom": "^0.9.12",
     "vite": "^8.3.0"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-updater": "^2.12.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }
