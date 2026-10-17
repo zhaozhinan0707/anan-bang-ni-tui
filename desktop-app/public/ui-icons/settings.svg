@@ -1,0 +1,13 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="icons/Components/switch-button" clip-path="url(#clip0_0_56)">
+<path id="Vector" d="M11.25 1.25H3.75C2.36929 1.25 1.25 2.36929 1.25 3.75C1.25 5.13072 2.36929 6.25 3.75 6.25H11.25C12.6307 6.25 13.75 5.13072 13.75 3.75C13.75 2.36929 12.6307 1.25 11.25 1.25Z" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_2" d="M11.25 8.75H3.75C2.36929 8.75 1.25 9.86928 1.25 11.25C1.25 12.6307 2.36929 13.75 3.75 13.75H11.25C12.6307 13.75 13.75 12.6307 13.75 11.25C13.75 9.86928 12.6307 8.75 11.25 8.75Z" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_3" d="M11.25 4.375C11.5952 4.375 11.875 4.09519 11.875 3.75C11.875 3.40481 11.5952 3.125 11.25 3.125C10.9048 3.125 10.625 3.40481 10.625 3.75C10.625 4.09519 10.9048 4.375 11.25 4.375Z" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_4" d="M3.75 11.875C4.09519 11.875 4.375 11.5952 4.375 11.25C4.375 10.9048 4.09519 10.625 3.75 10.625C3.40481 10.625 3.125 10.9048 3.125 11.25C3.125 11.5952 3.40481 11.875 3.75 11.875Z" stroke-linejoin="round" stroke="black"/>
+</g>
+<defs>
+<clipPath id="clip0_0_56">
+<rect width="15" height="15" fill="white"/>
+</clipPath>
+</defs>
+</svg>

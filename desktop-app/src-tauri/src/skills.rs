@@ -90,20 +90,38 @@ pub fn init(data_dir: PathBuf) -> SkillState {
     let path = data_dir.join("skills.json");
     let items = std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_else(defaults);
     let state = SkillState { items: Arc::new(Mutex::new(items)), path };
-    persist(&state);
+    if let Err(error) = persist(&state) { eprintln!("初始化 Skill 库保存失败：{error}"); }
     state
 }
 
-fn persist(state: &SkillState) {
-    if let Ok(items) = state.items.lock() { if let Ok(raw) = serde_json::to_vec_pretty(&*items) { let temp = state.path.with_extension("tmp"); if std::fs::write(&temp, raw).is_ok() { let _ = std::fs::rename(temp, &state.path); } } }
+fn persist_items(path: &std::path::Path, items: &[SkillDefinition]) -> Result<(), String> {
+    let raw = serde_json::to_vec_pretty(items).map_err(|error| format!("序列化 Skill 数据失败：{error}"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("无法创建 Skill 数据目录 {}：{error}", parent.display()))?;
+    }
+    let temp = path.with_extension("tmp");
+    if let Err(error) = std::fs::write(&temp, raw) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("无法写入 Skill 临时文件 {}：{error}", temp.display()));
+    }
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("无法更新 Skill 数据文件 {}：{error}", path.display()));
+    }
+    Ok(())
+}
+
+fn persist(state: &SkillState) -> Result<(), String> {
+    let items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    persist_items(&state.path, &items)
 }
 
 pub fn list(state: &SkillState) -> Vec<SkillDefinition> { let mut items = state.items.lock().map(|x| x.clone()).unwrap_or_default(); items.sort_by_key(|item| (!item.favorite, std::cmp::Reverse(item.last_used_at), item.name.clone())); items }
 
 pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefinition, String> {
     input.name = input.name.trim().to_string(); input.instruction = input.instruction.trim().to_string();
-    if input.name.is_empty() || input.name.len() > 80 { return Err("Skill 名称不能为空且不能超过 80 字".into()); }
-    if input.instruction.is_empty() || input.instruction.len() > 12_000 { return Err("Skill 执行指令不能为空且不能超过 12000 字".into()); }
+    if input.name.is_empty() || input.name.chars().count() > 80 { return Err("Skill 名称不能为空且不能超过 80 字".into()); }
+    if input.instruction.is_empty() || input.instruction.chars().count() > 12_000 { return Err("Skill 执行指令不能为空且不能超过 12000 字".into()); }
     input.id = if input.id.trim().is_empty() { uuid::Uuid::new_v4().to_string() } else { input.id.trim().to_string() };
     input.category = if input.category.trim().is_empty() { "自建 Skill".into() } else { input.category.trim().to_string() };
     input.output_type = if input.output_type.trim().is_empty() { "prompt".into() } else { input.output_type.trim().to_string() };
@@ -117,7 +135,8 @@ pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefin
     if input.source.len() > 200 { input.source.truncate(200); }
     if input.scope_project_id.len() > 100 { return Err("项目范围标识过长".into()); }
     input.updated_at = now();
-    let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    let mut current = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    let mut items = current.clone();
     if let Some(index) = items.iter().position(|item| item.id == input.id) {
         let old = &items[index];
         let changed = content_changed(old, &input);
@@ -133,12 +152,46 @@ pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefin
         input.revisions.clear();
         items.push(input.clone());
     }
-    drop(items); persist(state); Ok(input)
+    persist_items(&state.path, &items)?;
+    *current = items;
+    Ok(input)
 }
 
-pub fn remove(state: &SkillState, id: &str) -> Result<(), String> { let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let before = items.len(); items.retain(|item| item.id != id); if before == items.len() { return Err("未找到要删除的 Skill".into()); } drop(items); persist(state); Ok(()) }
-pub fn touch(state: &SkillState, id: &str) { if let Ok(mut items) = state.items.lock() { if let Some(item) = items.iter_mut().find(|item| item.id == id) { item.last_used_at = now(); } } persist(state); }
-pub fn import(state: &SkillState, raw: &str) -> Result<usize, String> { let mut input: Vec<SkillDefinition> = serde_json::from_str(raw).or_else(|_| serde_json::from_str::<SkillDefinition>(raw).map(|item| vec![item])).map_err(|_| "Skill 导入文件格式无效")?; let mut items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let mut added = 0; for mut item in input.drain(..).take(100) { if item.name.trim().is_empty() || item.instruction.trim().is_empty() { continue; } item.id = uuid::Uuid::new_v4().to_string(); item.built_in = false; item.favorite = false; item.version = 1; item.source = "json-import".into(); item.scope_project_id.clear(); item.revisions.clear(); item.updated_at = now(); if items.iter().any(|current| current.name == item.name) { item.name = format!("{}（导入）", item.name); } items.push(item); added += 1; } drop(items); persist(state); Ok(added) }
+pub fn remove(state: &SkillState, id: &str) -> Result<(), String> {
+    let mut current = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    let mut items = current.clone();
+    let before = items.len();
+    items.retain(|item| item.id != id);
+    if before == items.len() { return Err("未找到要删除的 Skill".into()); }
+    persist_items(&state.path, &items)?;
+    *current = items;
+    Ok(())
+}
+
+pub fn touch(state: &SkillState, id: &str) -> Result<(), String> {
+    let mut current = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    let mut items = current.clone();
+    let Some(item) = items.iter_mut().find(|item| item.id == id) else { return Ok(()); };
+    item.last_used_at = now();
+    persist_items(&state.path, &items)?;
+    *current = items;
+    Ok(())
+}
+
+pub fn import(state: &SkillState, raw: &str) -> Result<usize, String> {
+    let mut input: Vec<SkillDefinition> = serde_json::from_str(raw).or_else(|_| serde_json::from_str::<SkillDefinition>(raw).map(|item| vec![item])).map_err(|_| "Skill 导入文件格式无效")?;
+    let mut current = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
+    let mut items = current.clone();
+    let mut added = 0;
+    for mut item in input.drain(..).take(100) {
+        if item.name.trim().is_empty() || item.instruction.trim().is_empty() { continue; }
+        item.id = uuid::Uuid::new_v4().to_string(); item.built_in = false; item.favorite = false; item.version = 1; item.source = "json-import".into(); item.scope_project_id.clear(); item.revisions.clear(); item.updated_at = now();
+        if items.iter().any(|current| current.name == item.name) { item.name = format!("{}（导入）", item.name); }
+        items.push(item); added += 1;
+    }
+    if added > 0 { persist_items(&state.path, &items)?; *current = items; }
+    Ok(added)
+}
 pub fn export(state: &SkillState, ids: &[String]) -> Result<String, String> { let items = state.items.lock().map_err(|_| "Skill 库暂时不可用")?; let chosen: Vec<_> = items.iter().filter(|item| ids.is_empty() || ids.contains(&item.id)).cloned().collect(); serde_json::to_string_pretty(&chosen).map_err(|error| error.to_string()) }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,7 +211,7 @@ pub async fn run(state: &SkillState, ai_state: &crate::ai::AiState, request: Ski
     let examples = skill.training_examples.iter().rev().take(5).enumerate().map(|(index, example)| format!("### 训练项目 {}：{}\n{}", index + 1, example.project_name, example.summary.chars().take(2_500).collect::<String>())).collect::<Vec<_>>().join("\n\n");
     let message = format!("执行 Skill「{}」。\n\n## Skill 工作指令（必须遵守）\n{}\n\n## 已确认的项目训练案例\n{}\n\n## 当前上下文摘要\n{}\n\n请直接完成 Skill 要求。输出类型：{}。", skill.name, skill.instruction, if examples.is_empty() { "无" } else { &examples }, if request.context_summary.trim().is_empty() { "未提供额外摘要" } else { request.context_summary.trim() }, skill.output_type);
     let result = crate::ai::assistant(ai_state, message, (!context.trim().is_empty()).then_some(context), request.image_data_url).await?;
-    touch(state, &skill.id);
+    if let Err(error) = touch(state, &skill.id) { eprintln!("更新 Skill 使用记录失败：{error}"); }
     Ok(SkillRunResult { text: result.text, model: result.model, skill })
 }
 

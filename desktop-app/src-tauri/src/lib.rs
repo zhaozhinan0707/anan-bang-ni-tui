@@ -158,6 +158,7 @@ pub fn run() {
             ,list_project_assets
             ,save_project_asset
             ,read_project_asset
+            ,read_project_asset_preview
             ,delete_project_asset
             ,delete_project_assets
             ,open_external_url
@@ -172,6 +173,8 @@ fn list_project_assets(project_id: String, app: tauri::AppHandle) -> Result<Vec<
 fn save_project_asset(project_id: String, asset: assets::ProjectAssetInput, app: tauri::AppHandle) -> Result<assets::ProjectAsset, String> { assets::save(&app, &project_id, asset) }
 #[tauri::command]
 fn read_project_asset(project_id: String, asset_id: String, app: tauri::AppHandle) -> Result<assets::ProjectAssetContent, String> { assets::read(&app, &project_id, &asset_id) }
+#[tauri::command]
+fn read_project_asset_preview(project_id: String, asset_id: String, app: tauri::AppHandle) -> Result<assets::ProjectAssetContent, String> { assets::read_preview(&app, &project_id, &asset_id) }
 #[tauri::command]
 fn delete_project_asset(project_id: String, asset_id: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> { assets::remove(&app, &project_id, &asset_id)?; Ok(json!({"ok":true})) }
 #[tauri::command]
@@ -273,9 +276,9 @@ fn take_canvas_import(state: tauri::State<ai::AiState>) -> Option<ai::CanvasImpo
     ai::take_canvas_import(&state)
 }
 
-/// 每个项目最多保留十份自动备份，备份位于应用数据目录，不覆盖当前项目。
+/// 每个项目保留最新两份自动备份，全部项目合计最多十份。
 #[tauri::command]
-fn backup_canvas_project(project_name: String, data: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+fn backup_canvas_project(project_id: String, project_name: String, data: String, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     if data.is_empty() || data.len() > 600_000_000 { return Err("备份数据为空或超过 600MB；请拆分项目后再备份".into()); }
     let root = app.path().app_data_dir().map_err(|error| error.to_string())?.join("canvas-backups");
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -284,13 +287,42 @@ fn backup_canvas_project(project_name: String, data: String, app: tauri::AppHand
     let temporary = path.with_extension("tmp");
     std::fs::write(&temporary, data).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
-    let mut backups: Vec<_> = std::fs::read_dir(&root).map_err(|error| error.to_string())?.flatten().filter_map(|entry| {
-        let metadata = entry.metadata().ok()?;
-        Some((metadata.modified().ok()?, entry.path()))
-    }).collect();
-    backups.sort_by_key(|item| std::cmp::Reverse(item.0));
-    for (_, old) in backups.into_iter().skip(10) { let _ = std::fs::remove_file(old); }
+    let _ = prune_canvas_backups(&root, &path, &project_id, &project_name);
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }))
+}
+
+fn prune_canvas_backups(root: &std::path::Path, new_backup: &std::path::Path, project_id: &str, project_name: &str) -> Result<(), String> {
+    let mut backups: Vec<_> = std::fs::read_dir(root).map_err(|error| error.to_string())?.flatten().filter_map(|entry| {
+        let path = entry.path();
+        let file_name = path.file_name()?.to_string_lossy().to_string();
+        if !file_name.ends_with(".prompt-canvas.json") { return None; }
+        let metadata = entry.metadata().ok()?;
+        let modified = metadata.modified().ok()?;
+        let project_key = if path == new_backup {
+            if project_id.trim().is_empty() { format!("name:{}", project_name.trim()) } else { format!("id:{}", project_id.trim()) }
+        } else {
+            let project = canvas_backup_project_metadata(&path);
+            if let Some(id) = project.project_id.filter(|id| !id.trim().is_empty()) { format!("id:{}", id) }
+            else {
+                let name = project.project_name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| infer_canvas_backup_project_name(&file_name));
+                format!("name:{}", name.trim())
+            }
+        };
+        Some((modified, path, project_key))
+    }).collect();
+    backups.sort_by_key(|backup| std::cmp::Reverse(backup.0));
+    let mut retained_by_project = std::collections::HashMap::<String, usize>::new();
+    let mut retained_total = 0usize;
+    for (_, path, project_key) in backups {
+        let retained_for_project = retained_by_project.entry(project_key).or_insert(0);
+        if *retained_for_project >= 2 || retained_total >= 10 {
+            let _ = std::fs::remove_file(path);
+        } else {
+            *retained_for_project += 1;
+            retained_total += 1;
+        }
+    }
+    Ok(())
 }
 
 /// 将当前画布项目直接导出到桌面的“提示词”目录，避免 WebView 拦截网页下载。
@@ -342,6 +374,82 @@ fn canvas_backup_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Stri
     Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join("canvas-backups"))
 }
 
+struct CanvasBackupProjectMetadata {
+    project_id: Option<String>,
+    project_name: Option<String>,
+}
+
+impl Default for CanvasBackupProjectMetadata {
+    fn default() -> Self { Self { project_id: None, project_name: None } }
+}
+
+impl<'de> serde::Deserialize<'de> for CanvasBackupProjectMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        struct ProjectVisitor;
+        impl<'de> serde::de::Visitor<'de> for ProjectVisitor {
+            type Value = CanvasBackupProjectMetadata;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result { formatter.write_str("a canvas project metadata object") }
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where A: serde::de::MapAccess<'de> {
+                let mut metadata = CanvasBackupProjectMetadata::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "id" => metadata.project_id = map.next_value()?,
+                        "name" => metadata.project_name = map.next_value()?,
+                        _ => { let _: serde::de::IgnoredAny = map.next_value()?; }
+                    }
+                    if metadata.project_id.is_some() && metadata.project_name.is_some() { return Ok(metadata); }
+                }
+                Ok(metadata)
+            }
+        }
+        deserializer.deserialize_map(ProjectVisitor)
+    }
+}
+
+struct CanvasBackupEnvelopeMetadata { project: Option<CanvasBackupProjectMetadata> }
+
+impl<'de> serde::Deserialize<'de> for CanvasBackupEnvelopeMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        struct EnvelopeVisitor;
+        impl<'de> serde::de::Visitor<'de> for EnvelopeVisitor {
+            type Value = CanvasBackupEnvelopeMetadata;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result { formatter.write_str("a canvas backup object") }
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where A: serde::de::MapAccess<'de> {
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "project" { return Ok(CanvasBackupEnvelopeMetadata { project: Some(map.next_value()?) }); }
+                    let _: serde::de::IgnoredAny = map.next_value()?;
+                }
+                Ok(CanvasBackupEnvelopeMetadata { project: None })
+            }
+        }
+        deserializer.deserialize_map(EnvelopeVisitor)
+    }
+}
+
+fn canvas_backup_project_metadata(path: &std::path::Path) -> CanvasBackupProjectMetadata {
+    std::fs::File::open(path).ok().and_then(|file| {
+        let mut deserializer = serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+        <CanvasBackupEnvelopeMetadata as serde::Deserialize>::deserialize(&mut deserializer).ok()
+    }).and_then(|metadata| metadata.project).unwrap_or_default()
+}
+
+fn infer_canvas_backup_project_name(file_name: &str) -> String {
+    let stem = file_name.strip_suffix(".prompt-canvas.json").unwrap_or(file_name);
+    if let Some((prefix, time)) = stem.rsplit_once('-') {
+        if time.len() == 6 && time.chars().all(|character| character.is_ascii_digit()) {
+            if let Some((project_name, date)) = prefix.rsplit_once('-') {
+                if date.len() == 8 && date.chars().all(|character| character.is_ascii_digit()) {
+                    return project_name.to_string();
+                }
+            }
+        }
+    }
+    stem.to_string()
+}
 #[tauri::command]
 fn list_canvas_backups(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
     let root = canvas_backup_root(&app)?;
@@ -351,7 +459,10 @@ fn list_canvas_backups(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, 
         if path.extension()?.to_str()? != "json" { return None; }
         let metadata = entry.metadata().ok()?;
         let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
-        Some(json!({ "name": path.file_name()?.to_string_lossy(), "size": metadata.len(), "modifiedAt": modified }))
+        let file_name = path.file_name()?.to_string_lossy().to_string();
+        let backup_metadata = canvas_backup_project_metadata(&path);
+        let project_name = backup_metadata.project_name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| infer_canvas_backup_project_name(&file_name));
+        Some(json!({ "name": file_name, "size": metadata.len(), "modifiedAt": modified, "projectId": backup_metadata.project_id, "projectName": project_name }))
     }).collect();
     items.sort_by_key(|item| std::cmp::Reverse(item.get("modifiedAt").and_then(|value| value.as_u64()).unwrap_or(0)));
     Ok(items)

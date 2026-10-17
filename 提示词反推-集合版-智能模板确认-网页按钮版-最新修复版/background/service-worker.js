@@ -184,8 +184,10 @@ const MAX_RETRIES = 2;
 const PROMPT_OPTIMIZE_TIMEOUT = 120000;
 const VISION_PROMPT_OPTIMIZE_TIMEOUT = 90000;
 const LOCAL_PROMPT_OPTIMIZE_TIMEOUT = 180000;
-// 当前接入的兼容接口上限为 2048；所有优化/反推分支共用此安全值。
+// 短文本优化沿用兼容接口的 2048 上限；图片反推单独配置。
 const PROMPT_OPTIMIZE_MAX_TOKENS = 2048;
+// 图片反推的输出预算独立于短文本优化，容纳完整的中文长提示词。
+const REVERSE_PROMPT_MAX_TOKENS = 4096;
 const EDIT_INSTRUCTION_TIMEOUT = 30000;
 const ENHANCE_TASK_MAX_RUNTIME = 180000;
 const ENHANCE_TASK_KEY = 'pr_enhance_task';
@@ -1134,7 +1136,7 @@ async function callOpenAICompatible(provider, base, apiKey, model, systemPrompt,
         ],
       },
     ],
-    max_tokens: 2000,
+    max_tokens: REVERSE_PROMPT_MAX_TOKENS,
     temperature: 0.7,
     top_p: 0.9,
     stream: false,
@@ -1162,7 +1164,7 @@ async function callAnthropic(base, apiKey, model, systemPrompt, imageBase64, mim
   };
   const payload = {
     model,
-    max_tokens: 2000,
+    max_tokens: REVERSE_PROMPT_MAX_TOKENS,
     system: systemPrompt,
     messages: [
       {
@@ -1209,7 +1211,7 @@ async function callGoogle(base, apiKey, model, systemPrompt, imageBase64, mimeTy
       },
     ],
     generationConfig: {
-      maxOutputTokens: 2000,
+      maxOutputTokens: REVERSE_PROMPT_MAX_TOKENS,
       temperature: 0.7,
       topP: 0.9,
     },

@@ -1,0 +1,39 @@
+.workflow-node.prompt{box-sizing:border-box;width:523px;height:374px!important;min-height:374px!important;padding:0;display:flex;flex-direction:column;gap:0;overflow:visible;background:#fff;border:1px solid #ededed;border-radius:16px;box-shadow:0 0 32px rgba(0,0,0,.1);color:#111}
+.workflow-node.prompt.selected{outline:0;outline-offset:0;box-shadow:0 0 32px rgba(0,0,0,.12)}
+.workflow-node.prompt.collapsed{height:48px!important;min-height:48px!important;padding:0!important;overflow:hidden}
+.workflow-node.prompt .prompt-node-header{box-sizing:border-box;flex:none;height:24px;min-height:24px;margin:4px 21px 0 11px;padding:0;display:flex;align-items:center;gap:6px;background:transparent;border:0;color:#111;font-size:16px;line-height:20px}
+.workflow-node.prompt .prompt-node-header .node-status{flex:none;width:8px!important;height:8px;border-radius:50%;background:#111;box-shadow:none}
+.workflow-node.prompt .prompt-node-header .node-status.running{background:#f59e0b}
+.workflow-node.prompt .prompt-node-header .node-status.failed{background:#ef4444}
+.workflow-node.prompt .prompt-node-header b{font-size:16px;font-weight:400;line-height:20px;color:#111}
+.workflow-node.prompt .prompt-node-header button{box-sizing:border-box;flex:none;width:20px;height:20px;margin:0 0 0 auto;padding:0;display:grid;place-items:center;border:0;background:transparent;color:#333;font-size:16px;line-height:20px}
+.workflow-node.prompt .prompt-node-header button img{display:block;width:20px;height:20px;object-fit:contain}
+.workflow-node.prompt .prompt-node-body{position:absolute;top:35px;left:25px;right:25px;bottom:15px;box-sizing:border-box;color:#111}
+.workflow-node.prompt .prompt-template-caption,.workflow-node.prompt .prompt-field-caption{position:absolute;box-sizing:border-box;margin:0;padding:0;display:flex;align-items:center;gap:4px;color:#111;font-size:11px;font-weight:400;line-height:14px;white-space:nowrap}
+.workflow-node.prompt .prompt-template-caption{top:3px;left:0;height:14px;gap:4px;color:#555}
+.workflow-node.prompt .prompt-template-radio{box-sizing:border-box;flex:none;width:8px;height:8px;border:1px solid #777;border-radius:50%;background:#fff}
+.workflow-node.prompt .prompt-template-select{position:absolute;top:19px;left:0;right:0;box-sizing:border-box;height:21px;min-height:21px;margin:0;padding:0;display:block}
+.workflow-node.prompt .prompt-template-select select{box-sizing:border-box;width:100%;height:21px;appearance:none;border:1px solid #ededed;border-radius:999px;background:#fff;color:#222;padding:0 28px 0 12px;font-family:inherit;font-size:12px;line-height:19px}
+.workflow-node.prompt .prompt-template-select>img{position:absolute;right:8px;top:3px;display:block;width:16px;height:16px;object-fit:contain;pointer-events:none}
+.workflow-node.prompt .prompt-field-caption{top:51px;left:0;height:16px;gap:4px;font-size:12px;line-height:16px}
+.workflow-node.prompt .prompt-field-caption>img{display:block;flex:none;width:14px;height:14px;object-fit:contain}
+.workflow-node.prompt .prompt-node-input{position:absolute;top:70px;left:0;box-sizing:border-box;width:100%;height:177px;min-height:0!important;margin:0;padding:9px 14px;border:1px solid #ededed;border-radius:8px;background:#fff;color:#222;resize:none;outline:0;overflow:auto;font:10px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif}
+.workflow-node.prompt .prompt-node-input:focus{border-color:#d9d9d9;outline:1px solid #d9d9d9}
+.workflow-node.prompt .prompt-node-feedback{position:absolute;top:65px;left:10px;right:10px;z-index:1;max-height:16px;overflow:hidden;color:#b42318;font-size:9px;line-height:14px;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+.workflow-node.prompt .prompt-node-body.has-error .prompt-node-input{top:86px;height:161px}
+.workflow-node.prompt .prompt-generation-controls{position:absolute;top:255px;left:0;right:0;height:24px;display:flex;align-items:center;justify-content:space-between}
+.workflow-node.prompt .prompt-settings-anchor{position:relative;flex:none;height:24px}
+.workflow-node.prompt .prompt-settings-button{box-sizing:border-box;width:105px;height:24px;margin:0;padding:0 10px;border:1px solid #ededed;border-radius:8px;background:#fff;color:#111;font-family:inherit;font-size:12px;line-height:22px;white-space:nowrap;cursor:pointer}
+.workflow-node.prompt .prompt-settings-popover{position:absolute;z-index:8;left:0;bottom:calc(100% + 8px);box-sizing:border-box;width:300px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;border:1px solid #e3dced;border-radius:12px;background:#fff;box-shadow:0 12px 32px rgba(34,24,54,.16)}
+.workflow-node.prompt .prompt-settings-popover label{position:static;display:grid;gap:5px;color:#777;font-size:10px;line-height:14px;white-space:normal}
+.workflow-node.prompt .prompt-settings-popover select{box-sizing:border-box;width:100%;height:31px;min-width:0;padding:0 7px;border:1px solid #ddd5e8;border-radius:7px;background:#fff;color:#222;font-family:inherit;font-size:11px;line-height:29px}
+.workflow-node.prompt .prompt-consistency-toggle{position:relative;display:flex;align-items:center;gap:4px;margin:0 6px 0 0;color:#111;font-size:12px;line-height:20px;white-space:nowrap}
+.workflow-node.prompt .prompt-consistency-toggle input{position:absolute;z-index:1;left:0;top:0;width:20px;height:20px;margin:0;opacity:0;cursor:pointer}
+.workflow-node.prompt .prompt-consistency-check{box-sizing:border-box;flex:none;width:20px;height:20px;display:grid;place-items:center;border:1px solid #ededed;border-radius:8px;background:#fff}
+.workflow-node.prompt .prompt-consistency-check img{display:block;width:12px;height:12px;object-fit:contain}
+.workflow-node.prompt .prompt-node-actions{position:absolute;top:287px;left:0;right:0;box-sizing:border-box;height:35px;min-height:35px;margin:0;display:flex;gap:5px}
+.workflow-node.prompt .prompt-node-actions button{box-sizing:border-box;flex:1;min-width:0;height:35px;margin:0;padding:0 6px;border:1px solid #000;border-radius:8px;background:#000;color:#fff;font-family:inherit;font-size:16px;line-height:33px;white-space:nowrap;cursor:pointer}
+.workflow-node.prompt .prompt-node-actions button:hover{background:#222}
+.workflow-node.prompt .prompt-node-actions button:disabled{opacity:.55;cursor:wait}
+.workflow-node.prompt.collapsed .prompt-node-body{display:none}
+.workflow-node.prompt.collapsed .prompt-node-header{margin-top:11px}

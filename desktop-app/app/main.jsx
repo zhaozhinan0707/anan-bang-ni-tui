@@ -2,13 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { check } from '@tauri-apps/plugin-updater'
-import { Excalidraw, MainMenu, convertToExcalidrawElements } from '@excalidraw/excalidraw'
+import { Excalidraw, convertToExcalidrawElements } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 import './style.css'
 import './assets.css'
 import './stability.css'
 import './update.css'
+import './settings.css'
+import './prompt-node.css'
+import settingsSwitchIcon from './settings-switch.svg'
 import { extractProjectDocument, selectDocumentExcerpts, documentContext } from './documents.js'
 import { parseSkillMarkdown } from './skill-import.js'
 import { isMultilinePromptPaste, normalizePastedPrompt, wrapPastedPromptForCanvas } from './paste-prompt.js'
@@ -20,9 +24,18 @@ const documentKey = (projectId) => `${DOCUMENTS_KEY}.${projectId}`
 const loadDocuments = (projectId) => { try { return JSON.parse(localStorage.getItem(documentKey(projectId))) || [] } catch { return [] } }
 // 灵感空间固定使用白色画布，不提供主题切换，避免项目之间产生不一致的背景状态。
 const CANVAS_BACKGROUND = '#ffffff'
+// Excalidraw Helvetica (2) is a readable sans-serif; CJK glyphs fall back to
+// PingFang SC on Apple platforms and Microsoft YaHei on Windows.
+const CANVAS_TEXT_FONT_FAMILY = 2
 const emptyScene = { elements: [], files: {}, appState: { viewBackgroundColor: CANVAS_BACKGROUND } }
 const uid = () => crypto.randomUUID()
 const nonce = () => Math.floor(Math.random() * 2 ** 31)
+const controlNativeWindow = (action) => {
+  if (!window.__TAURI__) return
+  const appWindow = getCurrentWindow()
+  const request = action === 'minimize' ? appWindow.minimize() : action === 'maximize' ? appWindow.toggleMaximize() : appWindow.close()
+  void request.catch((error) => console.warn('窗口操作失败', error))
+}
 const errorMessage = (error, fallback = '操作失败') => {
   if (typeof error === 'string' && error.trim() && error !== '[object Event]') return error
   if (error instanceof Error && error.message) return error.message
@@ -52,6 +65,7 @@ const GENERATION_DEFAULTS = {
   generationBacksideReference: null,
   generationActionLock: true,
 }
+const textOnlyDefaultForNode = (node) => node?.generationTextOnly ?? Boolean(node?.kind === 'prompt' && node.sourceElementId && !['manual', 'agent', 'image-angle'].includes(node.templateId))
 const MULTI_ANGLE_DEFAULTS = {
   generationMultiAngleEnabled: false,
   generationAngleMode: 'camera',
@@ -86,9 +100,12 @@ const describeCameraTilt = (value) => {
   return '保持接近平视的垂直机位'
 }
 const describeCameraScale = (value) => {
-  if (value === 'close') return '极近景产品特写：摄像机明显靠近主体，产品主体占画面高度约 75%–90%，减少环境留白和远处背景；允许裁切环境，但不得裁掉产品的车把、前后轮、轮胎和关键结构。禁止输出与原图相同的中远景构图。'
-  if (value === 'wide') return '远景：摄像机后退，主体约占画面高度 35%–55%，保留更多环境空间和完整场景关系。'
-  return '中景：主体约占画面高度 55%–75%，同时保留适量环境和完整产品结构。'
+  const framing = value === 'close'
+    ? '近景：适当收紧取景，人物与产品整体约占画面高度 75%–90%，减少环境留白；允许裁切环境，但必须保留人物和产品关键结构。'
+    : value === 'wide'
+      ? '远景：人物与产品整体约占画面高度 35%–55%，保留更多环境空间和完整场景关系。'
+      : '中景：人物与产品整体约占画面高度 55%–75%，同时保留适量环境和完整产品结构。'
+  return `【景别与真实尺度锁定｜高优先级】${framing}画面中没有人物时，以完整产品作为取景主体并使用对应占比。上述占比指人物与产品的整体构图，不是要求放大产品。保持产品与人物的真实尺寸关系、产品自身比例和原有接触点；只可统一调整整张场景的取景距离和构图，严禁单独放大、缩小或重绘产品来满足画面占比。`
 }
 const describeAngleEvidence = (node = {}) => {
   const rotation = clampNumber(node.generationRotate, -180, 180)
@@ -129,7 +146,7 @@ const buildMultiAngleInstruction = (node = {}) => {
       : '如果原场景包含人物或骑行者，必须保持原图的人物身份、人数、头部朝向、身体重心、四肢骨架、手脚位置、抓握关系、骑行动作、服装和人与产品的相对关系；不得因为换视角而改成另一种姿势、增加或减少肢体、改变人物与产品的接触点。'
   const depthLock = '【空间与遮挡锁定】先判断人物、产品、地面和背景的前后深度，再生成画面；手必须真实握住车把，脚必须真实踩地或与踏板接触，车轮必须落在地面上。禁止手脚、车把、车架、轮胎穿过身体、衣服、地面或彼此重叠成不可能的结构；遮挡边界要自然连续，不能出现肢体断裂、双重车把、悬空车轮或穿模。'
   const extremeNote = extreme ? '这是极端视角变化。即使目标方向需要补全原图看不到的背面，也要优先保持整个人物动作、场景空间和产品结构，允许只对不可见区域做最小必要补全；不得为了补全背面而只重画产品、固定原背景，或重画整个人物。' : ''
-  return `【多角度视角控制｜最高优先级】\n这是同一场景的视角变体生成，不是只修改产品，也不是重新设计产品。控制模式：${mode}。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；目标旋转数值：${signedAngle(rotation)}；目标倾斜数值：${signedAngle(tilt)}；取景距离：${angleScaleLabel(node.generationScale)}。${describeCameraScale(node.generationScale)}${motion}。必须严格执行上述数值对应的目标机位，让人物和产品的可见侧面、背景透视、主体占画面比例、地面接触和遮挡关系发生与目标视角一致的明显变化；不要只改变颜色、产品姿势、背景或轻微裁切。尤其是近景和远景模式，必须先改变镜头距离和主体占画面比例，再处理人物、产品和背景的透视；不要把景别理解成只放大或缩小画布。${describeAngleEvidence(node)}${sceneLock}${poseLock}${depthLock}${extremeNote}${backsideReference}严格保持产品型号、车架结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、贴花、Logo、颜色、材质和各部件比例完全一致；目标视角看不到的区域按产品参考图和产品结构合理补全，禁止变成其他型号、通用款或新增删减部件。`
+  return `【多角度视角控制｜最高优先级】\n这是同一场景的视角变体生成，不是只修改产品，也不是重新设计产品。控制模式：${mode}。目标水平视角：${describeCameraRotation(node.generationRotate)}；目标垂直机位：${describeCameraTilt(node.generationTilt)}；目标旋转数值：${signedAngle(rotation)}；目标倾斜数值：${signedAngle(tilt)}；取景距离：${angleScaleLabel(node.generationScale)}。${describeCameraScale(node.generationScale)}${motion}。必须严格执行上述数值对应的目标机位，让人物和产品的可见侧面、背景透视、人物与产品整体在画面中的占比、地面接触和遮挡关系发生与目标视角一致的明显变化；不要只改变颜色、产品姿势、背景或轻微裁切。尤其是近景和远景模式，必须先改变整组场景的取景距离和人物与产品整体占画面比例，再处理人物、产品和背景的透视；不要把景别理解成只放大或缩小画布。${describeAngleEvidence(node)}${sceneLock}${poseLock}${depthLock}${extremeNote}${backsideReference}严格保持产品型号、车架结构、车把、立管、踏板、前后轮、轮毂、轮胎、挡泥板、灯具、走线、贴花、Logo、颜色、材质和各部件比例完全一致；目标视角看不到的区域按产品参考图和产品结构合理补全，禁止变成其他型号、通用款或新增删减部件。`
 }
 const formatGenerationDuration = (milliseconds = 0) => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000))
@@ -190,21 +207,26 @@ async function makeAssetThumbnail(dataURL) {
   const max = 360, scale = Math.min(1, max / Math.max(image.naturalWidth, image.naturalHeight))
   const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.naturalWidth * scale)); canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
   canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
-  return canvas.toDataURL('image/jpeg', 0.76)
+  const thumbnail = canvas.toDataURL('image/jpeg', 0.76)
+  image.src = ''; canvas.width = 1; canvas.height = 1
+  return thumbnail
 }
-// Excalidraw only needs a screen-sized copy. Keep the original dataURL in the
-// project asset store and sceneRef for generation, clipboard and downloads.
+// Excalidraw only needs a screen-sized copy. Keep originals in the project
+// asset store and load them temporarily for operations that need full fidelity.
 async function makeCanvasDisplayFile(file) {
   if (!file?.dataURL || !/^data:image\/(png|jpeg|jpg|webp|bmp);/i.test(file.dataURL)) return file
   const image = await new Promise((resolve, reject) => { const value = new Image(); value.onload = () => resolve(value); value.onerror = reject; value.src = file.dataURL })
   const maxEdge = 1600
-  if (Math.max(image.naturalWidth, image.naturalHeight) <= maxEdge) return file
-  const scale = maxEdge / Math.max(image.naturalWidth, image.naturalHeight)
+  const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight))
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
   canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
-  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
-  return { ...file, dataURL: canvas.toDataURL('image/webp', 0.82), mimeType: 'image/webp' }
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('无法创建画布预览')
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  const dataURL = canvas.toDataURL('image/webp', 0.78)
+  image.src = ''; canvas.width = 1; canvas.height = 1
+  return { ...file, dataURL, mimeType: 'image/webp' }
 }
 const persistedFiles = (files = {}) => Object.fromEntries(Object.entries(files).map(([id, file]) => file?.assetId ? [id, { ...file, dataURL: undefined }] : [id, file]))
 const serializableScene = (scene = {}) => ({ elements: scene.elements || [], appState: { viewBackgroundColor: CANVAS_BACKGROUND }, files: persistedFiles(scene.files), workflowNodes: scene.workflowNodes || [] })
@@ -225,10 +247,11 @@ async function prepareGenerationReference(dataURL, maxBytes) {
     const context = canvas.getContext('2d')
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     output = canvas.toDataURL('image/jpeg', quality)
-    if (dataUrlBytes(output) <= maxBytes) return output
+    if (dataUrlBytes(output) <= maxBytes) break
     if (quality > 0.52) quality -= 0.08
     else { scale *= 0.8; quality = 0.8 }
   }
+  image.src = ''; canvas.width = 1; canvas.height = 1
   return output
 }
 
@@ -288,14 +311,6 @@ const closestGenerationAspect = (ratio) => GENERATION_ASPECTS.reduce((closest, v
   const [width, height] = value.split(':').map(Number)
   return Math.abs(width / height - ratio) < Math.abs(closest[0] / closest[1] - ratio) ? [width, height, value] : closest
 }, [16, 9, '16:9'])[2]
-
-async function prepareGenerationReferences(images) {
-  const usable = images.filter((image) => image?.dataURL).slice(0, 8)
-  if (!usable.length) return []
-  // 为图片预留约 2.2MB 的二进制空间，连同 JSON/Base64 后仍低于常见的 4MB 网关上限。
-  const perImageBudget = Math.max(240 * 1024, Math.min(700 * 1024, Math.floor((2.2 * 1024 * 1024) / usable.length)))
-  return Promise.all(usable.map((image) => prepareGenerationReference(image.dataURL, perImageBudget)))
-}
 
 async function composeVisionReferences(primary, references = []) {
   const sources = [primary, ...references].filter((item) => item?.dataURL).slice(0, 8)
@@ -426,9 +441,10 @@ function MultiAngleDialog({ value = {}, previewUrl = '', onUse, onClose, disable
     event.target.value = ''
     if (!file) return
     try {
-      const dataURL = await readImageFile(file)
+      const id = uid(), rawDataURL = await readImageFile(file)
+      const preview = await makeCanvasDisplayFile({ id, dataURL: rawDataURL, name: file.name || '产品背面参考图', mimeType: file.type || 'image/png' })
       setReferenceError('')
-      patch({ generationBacksideReference: { id: uid(), dataURL, name: file.name || '产品背面参考图', mimeType: file.type || 'image/png', role: '同一产品的背面参考图' } })
+      patch({ generationBacksideReference: { id, dataURL: preview.dataURL, name: file.name || '产品背面参考图', mimeType: preview.mimeType || file.type || 'image/png', role: '同一产品的背面参考图' } })
     } catch (error) {
       setReferenceError(errorMessage(error, '背面参考图读取失败，请重试'))
     }
@@ -509,8 +525,19 @@ const blenderPromptForNode = (node, changes = {}) => {
   return [base, cameraText, lightText, orientationText, structureText].filter(Boolean).join('\n\n')
 }
 
-function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
+const workflowNodeDimensions = (node) => {
+  const referenceCount = Math.min(8, (node.referenceImages || []).length || (node.referenceImage ? 1 : 0))
+  const extraReferenceRows = Math.max(0, Math.ceil(referenceCount / 5) - 1) * 92
+  if (node.kind === 'prompt') return { width: 523, height: node.collapsed ? 48 : 374 }
+  if (node.kind === 'compose') return { width: 523, height: node.collapsed ? 42 : 374 }
+  if (node.kind === 'modify') return { width: 523, height: node.collapsed ? 48 : 698 + extraReferenceRows }
+  return { width: node.width, height: node.collapsed ? 48 : node.height }
+}
+
+function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedTemplateId, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onModifyAndGenerate, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
+  const [openGenerationSettings, setOpenGenerationSettings] = useState('')
+  const nodeBox = (node) => ({ ...node, ...workflowNodeDimensions(node) })
   const generationGuardUntil = useRef(0)
   const zoom = viewport.zoom?.value || viewport.zoom || 1
   const toScreen = (x, y) => ({ x: (x + (viewport.scrollX || 0)) * zoom, y: (y + (viewport.scrollY || 0)) * zoom })
@@ -544,7 +571,8 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
   const grouped = Object.values(nodes.reduce((groups, node) => {
     if (!node.workflowGroupId) return groups
     const source = elementById.get(node.sourceElementId)
-    const boxes = [{ x: node.x, y: node.y, width: node.width, height: node.height }]
+    const box = nodeBox(node)
+    const boxes = [{ x: box.x, y: box.y, width: box.width, height: box.height }]
     if (source) boxes.push(source)
     const entry = groups[node.workflowGroupId] || { id: node.workflowGroupId, name: node.workflowGroupName || '分组', boxes: [] }
     entry.boxes.push(...boxes); groups[node.workflowGroupId] = entry
@@ -568,36 +596,155 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
       const source = elementById.get(node.sourceElementId)
       const parent = nodeById.get(node.parentNodeId)
       if (!source && !parent) return null
-      const link = connector(parent || source, node)
+      const link = connector(parent ? nodeBox(parent) : source, nodeBox(node))
       const relation = parent ? 'parent' : 'source'
       const relationLabel = parent ? '断开两个提示词节点' : '断开图片与提示词节点'
       return <g className="workflow-link" key={node.id}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /><g className="workflow-link-control" role="button" aria-label={relationLabel} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDisconnect(node.id, relation) }}><circle cx={link.middle.x} cy={link.middle.y} r="12" /><text x={link.middle.x} y={link.middle.y + 4}>×</text></g></g>
     })}{nodes.flatMap((node) => (node.generatedElementIds || []).map((id) => {
       const target = elementById.get(id)
       if (!target) return null
-      const link = connector(node, target)
+      const link = connector(nodeBox(node), target)
       return <g className="workflow-link generation-link" key={`${node.id}-${id}`}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /></g>
     }))}</svg>
+    {nodes.flatMap((node) => (node.generatedElementIds || []).map((id) => {
+      const target = elementById.get(id)
+      if (!target || target.type !== 'image') return null
+      const point = toScreen(target.x - 18, target.y - 32)
+      return <div className="workflow-output-card" key={'output-card-' + node.id + '-' + id} aria-hidden="true" style={{ width: target.width + 36, height: target.height + 32, transform: "translate(" + point.x + "px, " + point.y + "px) scale(" + zoom + ")" }}>
+        <header><span />输出图片</header>
+      </div>
+    }))}
     {nodes.map((node) => {
-      const position = toScreen(node.x, node.y), text = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt
+      const position = toScreen(node.x, node.y), currentTemplate = templates.find((item) => item.id === node.templateId) || templates.find((item) => item.label === node.templateLabel) || templates.find((item) => item.id === selectedTemplateId) || templates[0], text = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt
       const references = node.referenceImages || (node.referenceImage ? [{ ...node.referenceImage, id: `legacy-${node.id}`, role: '补充参考' }] : [])
-      return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''}`} style={{ width: node.width, minHeight: node.collapsed ? 0 : node.height, transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
-        <header className="node-drag-handle" onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点"><span className={`node-status ${node.status || (node.busy ? 'running' : 'completed')}`} /> <span>{node.kind === 'blender' ? '3D' : node.kind === 'compose' ? 'IMG' : node.kind === 'skill' ? 'SKILL' : 'LLM'}</span><b>{node.kind === 'blender' ? 'Blender 场景' : node.kind === 'modify' ? '提示词修改' : node.kind === 'compose' ? '组合生图' : node.kind === 'skill' ? node.skillName || 'Skill 工作流' : '提示词反推'}</b><GenerationTimer node={node} /><small>{node.model}</small><button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : '－'}</button></header>
-        {!node.collapsed && <>
+      return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''}`} style={{ width: nodeBox(node).width, minHeight: node.collapsed ? 0 : nodeBox(node).height, ...(['compose', 'modify', 'prompt'].includes(node.kind) && !node.collapsed ? { height: nodeBox(node).height } : {}), transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
+        <header className={'node-drag-handle ' + (node.kind === 'prompt' ? 'prompt-node-header' : node.kind === 'compose' ? 'compose-node-header' : node.kind === 'modify' ? 'modify-node-header' : '')} onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点">
+          {node.kind === 'prompt' ? <>
+            <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
+            <b>提示词反推</b>
+            <button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : <img src="/ui-icons/prompt-minus.svg" alt="" />}</button>
+          </> : node.kind === 'compose' ? <>
+            <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
+            <b>组合生图</b>
+            <button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : <img src="/ui-icons/prompt-minus.svg" alt="" />}</button>
+          </> : node.kind === 'modify' ? <>
+            <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
+            <b>提示词修改</b>
+            <button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : <img src="/ui-icons/prompt-minus.svg" alt="" />}</button>
+          </> : <>
+            <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
+            <span>{node.kind === 'blender' ? '3D' : node.kind === 'skill' ? 'SKILL' : 'LLM'}</span>
+            <b>{node.kind === 'blender' ? 'Blender 场景' : node.kind === 'modify' ? '提示词修改' : node.kind === 'skill' ? node.skillName || 'Skill 工作流' : '提示词反推'}</b>
+            <GenerationTimer node={node} />
+            <small>{node.model}</small>
+            <button title={node.collapsed ? '展开节点' : '折叠节点'} onPointerDown={(event) => event.stopPropagation()} onClick={() => onUpdate(node.id, { collapsed: !node.collapsed })}>{node.collapsed ? '＋' : '－'}</button>
+          </>}
+        </header>
+        {!node.collapsed && (node.kind === 'compose' ? <section className="compose-node-body" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          {node.workflowGroupName && <div className="node-group-name">分组：{node.workflowGroupName}</div>}
+          <label className="compose-template-select" aria-label="生图模板">
+            <select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>
+              {!templates.some((item) => item.id === (node.templateId || '')) && <option value={node.templateId || ''}>{node.templateLabel || '人车真实场景摄影'}</option>}
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+            </select><img className="compose-template-chevron" src="/ui-icons/prompt-arrow-down.svg" alt="" />
+          </label>
+          <div className="compose-reference-status"><span className={'node-status ' + (node.status || 'completed')} /><small>{references.length ? '已关联 ' + references.length + ' 张产品参考图；编辑提示词或重新生成均会保留产品参考。' : '未关联产品参考图'}</small></div>
+          <label className="compose-prompt-label"><img src="/ui-icons/prompt-text-recognition.svg" alt="" />提示词</label>
+          <textarea className="compose-prompt-editor" aria-label="组合生图提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          {node.error && <p className="compose-node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
+          {node.generationError && <p className="compose-node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
+          {node.generationBusy && <div className="compose-generation-progress"><span>{node.generationStatus || '正在生成…'}</span><button type="button" onClick={() => onCancelGeneration(node)}>取消</button></div>}
+          <div className="compose-generation-controls">
+            <div className="compose-settings-anchor">
+              <button type="button" className="compose-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
+              {openGenerationSettings === node.id && <section className="compose-settings-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+              <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
+              <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
+              <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
+              </section>}
+            </div>
+            <label className="compose-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="compose-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
+          </div>
+          <footer className="compose-node-actions">
+            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.prompt?.trim()}>{node.generationBusy ? '生成中…' : '组合生图'}</button>
+            <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
+          </footer>
+        </section> : node.kind === 'modify' ? <section className="modify-node-body" style={{ '--modify-extra-reference-space': `${Math.max(0, Math.ceil(Math.min(8, references.length) / 5) - 1) * 92}px` }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <div className="modify-template-caption"><span className="modify-template-radio" /><span>修改提示词模板</span></div>
+          <label className="modify-template-select" aria-label="修改提示词模板">
+            <select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>
+              {!templates.some((item) => item.id === (node.templateId || '')) && <option value={node.templateId || ''}>{node.templateLabel || '人车真实场景摄影'}</option>}
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+            </select><img src="/ui-icons/prompt-arrow-down.svg" alt="" />
+          </label>
+          <label className="modify-field-caption modify-original-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>原版提示词</span></label>
+          <textarea className="modify-original-input" aria-label="原版提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          <label className="modify-field-caption modify-instruction-caption"><img src="/ui-icons/prompt-magic.svg" alt="" /><span>修改要求</span></label>
+          <textarea className="modify-instruction-input" aria-label="修改要求" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value, outputInstruction: '' })} />
+          <div className="modify-field-caption modify-reference-caption"><img src="/ui-icons/prompt-picture-one.svg" alt="" /><span>补充参考图片（最多 8 张）</span>
+            <label className="modify-upload-button"><input type="file" multiple accept="image/*" onChange={(event) => { onAttachImage(node.id, event.target.files); event.currentTarget.value = '' }} disabled={references.length >= 8} /><span>上传图片</span></label>
+          </div>
+          <div className="modify-reference-grid">{references.slice(0, 8).map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '修改参考图'} /><button type="button" aria-label="移除参考图片" onClick={() => onRemoveImage(node.id, image.id)}><span aria-hidden="true">×</span></button></figure>)}</div>
+          <label className="modify-field-caption modify-result-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>修改结果</span></label>
+          <textarea className="modify-result-input" aria-label="修改结果" value={node.output || ''} onChange={(event) => onUpdate(node.id, { output: event.target.value, outputInstruction: node.instruction || '', outputTemplateId: node.templateId || '', outputSourcePrompt: node.prompt || '' })} />
+          {(node.error || node.generationError) && <p className="modify-node-feedback">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</p>}
+          <div className="modify-generation-controls">
+            <div className="modify-settings-anchor">
+              <button type="button" className="modify-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
+              {openGenerationSettings === node.id && <section className="modify-settings-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+                <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
+                <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
+                <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
+              </section>}
+            </div>
+            <label className="modify-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="modify-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
+          </div>
+          <footer className="modify-node-actions">
+            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (node.generationBusy) onCancelGeneration(node); else { const needsPromptUpdate = !node.output?.trim() || node.outputInstruction !== (node.instruction || '') || node.outputTemplateId !== (node.templateId || '') || node.outputSourcePrompt !== (node.prompt || ''); if (needsPromptUpdate) onModifyAndGenerate(node); else runGeneration(event, node) } }} disabled={node.busy || !node.prompt?.trim() || !references.length}>{node.busy ? '正在修改…' : node.generationBusy ? '取消生图' : '组合生图'}</button>
+            <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
+          </footer>
+        </section> : node.kind === 'prompt' ? <section className={`prompt-node-body ${node.error || node.generationError ? 'has-error' : ''}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <div className="prompt-template-caption"><span className="prompt-template-radio" /><span>当前使用的模板</span></div>
+          <label className="prompt-template-select" aria-label="当前使用的模板">
+            <select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>
+              {!templates.some((item) => item.id === (node.templateId || '')) && <option value={node.templateId || ''}>{node.templateLabel || currentTemplate?.label || '人车真实场景摄影'}</option>}
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+            </select><img src="/ui-icons/prompt-arrow-down.svg" alt="" />
+          </label>
+          <label className="prompt-field-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>提示词</span></label>
+          <textarea className="prompt-node-input" aria-label="提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          {(node.error || node.generationError) && <div className="prompt-node-feedback" role="alert">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</div>}
+          <div className="prompt-generation-controls" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+            <div className="prompt-settings-anchor">
+              <button type="button" className="prompt-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
+              {openGenerationSettings === node.id && <section className="prompt-settings-popover">
+                <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
+                <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
+                <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
+              </section>}
+            </div>
+            <label className="prompt-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="prompt-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
+          </div>
+          <footer className="prompt-node-actions">
+            <button onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRegenerate(node) }} disabled={node.busy}>{node.busy ? '生成中…' : '重新生成'}</button>
+            <button onClick={(event) => { event.preventDefault(); event.stopPropagation(); onModify(node) }} disabled={node.busy}>提示词修改</button>
+            <button onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>{node.generationBusy ? '生成中…' : '生成图片'}</button>
+            <button onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
+          </footer>
+        </section> : <>
         {node.workflowGroupName && <div className="node-group-name">分组：{node.workflowGroupName}</div>}
-        {node.kind !== 'skill' && <label className="node-template">{node.kind === 'modify' ? '修改所用模板' : '重新生成模板'}<select value={node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select><small>上次实际使用：{node.templateLabel || '默认视觉反推模板'}</small></label>}
+        {node.kind !== 'skill' && <label className="node-template">重新生成模板<select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select><small>上次实际使用：{node.templateLabel || '默认视觉反推模板'}</small></label>}
         {node.kind === 'skill' && <small className="node-composition-note">Skill v{node.skillVersion || 1} · 输入：{(node.skillRequires || []).join('、') || '无'} · 输出：{node.skillOutputType === 'analysis' ? '分析与建议' : '完整提示词'}</small>}
-        {node.kind === 'modify' && <><label>原版提示词<textarea value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /></label><label>修改要求<textarea placeholder="描述你要修改的画面内容…" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value })} /></label><label className="node-reference">补充参考图片（最多 8 张）<input type="file" multiple accept="image/*" onChange={(event) => onAttachImage(node.id, event.target.files)} /><div className="node-reference-grid">{references.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '修改参考图'} /><input value={image.role || ''} placeholder="用途，如：产品外观" onChange={(event) => onUpdate(node.id, { referenceImages: references.map((item) => item.id === image.id ? { ...item, role: event.target.value } : item), referenceImage: null })} /><button onClick={() => onRemoveImage(node.id, image.id)}>删除</button></figure>)}</div></label></>}
         {node.kind === 'compose' && <small className="node-composition-note">已关联 {references.length} 张产品参考图{node.promptReferenceImages?.length ? `，另有 ${node.promptReferenceImages.length} 张提示词参考图` : ''}；编辑提示词或重新生成均会保留产品参考。</small>}
         {node.kind === 'blender' && <section className="node-generation-settings"><small>场景：{node.blenderMeta?.sceneName || '未命名'} · Blender {node.blenderMeta?.blenderVersion || '-'} · {node.blenderMeta?.sourceType === 'blender_render' ? '正式渲染' : '摄像机视口'}</small><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockCamera} onChange={(event) => { const lockCamera = event.target.checked, prompt = blenderPromptForNode(node, { lockCamera }); onUpdate(node.id, { lockCamera, prompt, output: prompt }) }} />锁定摄像机</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockLighting} onChange={(event) => { const lockLighting = event.target.checked, prompt = blenderPromptForNode(node, { lockLighting }); onUpdate(node.id, { lockLighting, prompt, output: prompt }) }} />锁定光源</label><label className="consistency-toggle"><input type="checkbox" checked={node.lockProductOrientation !== false} onChange={(event) => { const lockProductOrientation = event.target.checked, prompt = blenderPromptForNode(node, { lockProductOrientation }); onUpdate(node.id, { lockProductOrientation, prompt, output: prompt }) }} />锁定产品朝向（禁止镜像）</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.useStructurePasses} onChange={(event) => { const useStructurePasses = event.target.checked, prompt = blenderPromptForNode(node, { useStructurePasses }); onUpdate(node.id, { useStructurePasses, prompt, output: prompt }) }} />结构约束（{references.length}）</label></section>}
-        <label>{node.kind === 'modify' ? '修改结果（可直接编辑）' : node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => node.kind === 'blender' ? onUpdate(node.id, { prompt: event.target.value, output: event.target.value, blenderBasePrompt: stripBlenderConstraintBlocks(event.target.value) }) : onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
+        <label>{node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => node.kind === 'blender' ? onUpdate(node.id, { prompt: event.target.value, output: event.target.value, blenderBasePrompt: stripBlenderConstraintBlocks(event.target.value) }) : onUpdate(node.id, { [node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
         {!!node.versionHistory?.length && <details className="node-versions"><summary>历史版本（{node.versionHistory.length}）</summary>{[...node.versionHistory].reverse().map((version, index) => <button key={version.id || index} onClick={() => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: version.prompt, model: version.model || node.model, templateId: version.templateId || node.templateId, templateLabel: version.templateLabel || node.templateLabel })}><b>{new Date(version.createdAt || Date.now()).toLocaleString()}</b><span>{version.templateLabel || version.model || '历史结果'}</span></button>)}</details>}
         {node.error && <p className="node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
         {node.generationError && <p className="node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
         <GenerationTimingBreakdown timing={node.generationTiming} />
-        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label><label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label></section>
+        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>{(node.generationTextOnly !== undefined || textOnlyDefaultForNode(node)) && <label className="consistency-toggle"><input type="checkbox" checked={textOnlyDefaultForNode(node)} onChange={(event) => onUpdate(node.id, { generationTextOnly: event.target.checked })} />纯提示词生成（不发送原图）</label>}{!textOnlyDefaultForNode(node) && <label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label>}</section>
          <footer>{node.kind === 'prompt' ? <><button onClick={() => onRegenerate(node)} disabled={node.busy}>↻ {node.busy ? '生成中…' : '重新生成'}</button><button className="node-primary" onClick={() => onModify(node)}>✎ 用于提示词修改</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '生成预览'}</button></> : node.kind === 'compose' ? <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '按组合生图'}</button> : node.kind === 'skill' ? <>{node.skillOutputType === 'prompt' && <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, { ...node, prompt: node.output, output: node.output })} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '生成中…' : '用结果生成预览'}</button>}<button onClick={() => navigator.clipboard.writeText(node.output || '')}>复制结果</button></> : <><button className="node-primary" onClick={() => onRegenerate(node, true)} disabled={node.busy}>▶ {node.busy ? '生成中…' : '生成修改提示词'}</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '改图中…' : '验证改图'}</button></>}{node.generationBusy && <button className="node-cancel-generation" onClick={() => onCancelGeneration(node)}>取消生图</button>}<button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button></footer>
-        </>}
+        </>)}
       </article>
     })}
   </div>
@@ -611,6 +758,9 @@ function SkillLibrary({ skills, context, projectId, onUse, onSave, onDelete, onE
   const [presetFilter, setPresetFilter] = useState('')
   const [presetSelection, setPresetSelection] = useState([])
   const [importPreview, setImportPreview] = useState(null)
+  const [skillActionBusy, setSkillActionBusy] = useState(false)
+  const [skillActionError, setSkillActionError] = useState('')
+  const [skillActionNotice, setSkillActionNotice] = useState('')
   const fileInput = useRef(null)
   const visibleSkills = skills.filter((item) => !item.scopeProjectId || item.scopeProjectId === projectId)
   const categories = ['全部', ...new Set(visibleSkills.map((item) => item.category || '未分类'))]
@@ -631,18 +781,51 @@ function SkillLibrary({ skills, context, projectId, onUse, onSave, onDelete, onE
     try {
       if (file.size > 40_000 && /\.md$/i.test(file.name)) throw new Error('SKILL.md 不能超过 40KB')
       const raw = await file.text()
-      if (/\.json$/i.test(file.name)) { await onImport(raw); return }
+      if (/\.json$/i.test(file.name)) {
+        const parsed = JSON.parse(raw)
+        const entries = Array.isArray(parsed) ? parsed : [parsed]
+        if (!entries.length) throw new Error('JSON 文件中没有 Skill')
+        setSkillActionError('')
+        setSkillActionNotice('')
+        const previewText = entries.slice(0, 100).map((item, index) => `名称：${item?.name?.trim() || `未命名 Skill ${index + 1}`}\n简介：${item?.description || '无'}\n\n${item?.instruction || '（没有执行指令）'}`).join('\n\n────────\n\n')
+        setImportPreview({ kind: 'json', raw, source: file.name, count: entries.length, previewText })
+        return
+      }
       const parsed = parseSkillMarkdown(file.name, raw)
-      setImportPreview({ ...blank, ...parsed, category: '外部导入' })
+      setSkillActionError('')
+      setSkillActionNotice('')
+      setImportPreview({ kind: 'markdown', ...blank, ...parsed, category: '外部导入' })
     } catch (error) { alert(`导入失败：${error.message || error}`) }
   }
+  const runSkillAction = async (action, onSuccess, getNotice) => {
+    if (skillActionBusy) return
+    setSkillActionBusy(true)
+    setSkillActionError('')
+    setSkillActionNotice('')
+    try {
+      const result = await action()
+      onSuccess?.(result)
+      setSkillActionNotice(getNotice?.(result) || '操作成功')
+    } catch (error) {
+      setSkillActionError(error?.message || String(error))
+    } finally {
+      setSkillActionBusy(false)
+    }
+  }
+  const confirmSkillImport = () => {
+    if (importPreview?.kind === 'json') {
+      return runSkillAction(() => onImport(importPreview.raw), () => setImportPreview(null), (result) => `已导入 ${result?.count || 0} 个 Skill`)
+    }
+    return runSkillAction(() => onSave(importPreview), () => setImportPreview(null), (saved) => `已导入并保存「${saved.name}」`)
+  }
+  const saveEditedSkill = () => runSkillAction(() => onSave(editing), () => setEditing(null), (saved) => `已保存 Skill「${saved.name}」`)
   const sourceName = (skill) => skill.builtIn ? '内置' : skill.source?.startsWith('markdown:') ? `SKILL.md · ${skill.source.slice(9)}` : skill.source === 'json-import' ? 'JSON 导入' : skill.trainingExamples?.length ? '项目训练' : '自建'
   return <div className="skill-library-backdrop" onMouseDown={onClose}><section className="skill-library" onMouseDown={(event) => event.stopPropagation()}>
     <header><div><small>LOCAL SKILL LIBRARY</small><h2>Skill 库</h2></div><button onClick={onClose}>×</button></header>
     <div className="skill-library-tools"><input type="search" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、分类或标签…" /><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select><button className="primary" onClick={() => setEditing(blank)}>＋ 新建</button><button onClick={() => fileInput.current?.click()}>导入 JSON / SKILL.md</button><button onClick={() => onExport([])}>导出全部</button><input ref={fileInput} hidden type="file" accept=".json,.md" onChange={async (event) => { await readImport(event.target.files?.[0]); event.target.value = '' }} /></div>
-    <div className="skill-preset-bar"><button className={!presetFilter ? 'active' : ''} onClick={() => setPresetFilter('')}>全部 Skill</button>{presets.map((preset) => <span key={preset.id}><button className={presetFilter === preset.id ? 'active' : ''} onClick={() => setPresetFilter(preset.id)}>{preset.name} · {preset.skillIds.filter((id) => visibleSkills.some((skill) => skill.id === id)).length}</button><button title={`删除组合 ${preset.name}（不删除 Skill）`} onClick={() => { if (window.confirm(`删除组合「${preset.name}」？其中的 Skill 不会删除。`)) { savePresets(presets.filter((item) => item.id !== preset.id)); if (presetFilter === preset.id) setPresetFilter('') } }}>×</button></span>)}<button onClick={createPreset}>将已勾选项保存为组合{presetSelection.length ? ` (${presetSelection.length})` : ''}</button>{presetFilter && <button onClick={() => { savePresets(presets.map((item) => item.id === presetFilter ? { ...item, skillIds: [...new Set([...item.skillIds, ...presetSelection])] } : item)); setPresetSelection([]) }} disabled={!presetSelection.length}>加入当前组合</button>}</div>
-    {importPreview && <section className="skill-import-preview"><h3>导入预览：{importPreview.name}</h3><p>来源：{importPreview.source}。仅导入文字指令；不会运行脚本、安装依赖或访问外部网站。请先检查内容。</p><textarea readOnly value={importPreview.instruction} /><div><button onClick={() => setImportPreview(null)}>取消</button><button className="primary" onClick={() => { setEditing(importPreview); setImportPreview(null) }}>检查并编辑</button></div></section>}
-    {editing ? <section className="skill-editor"><h3>{editing.id ? `编辑：${editing.name} · v${editing.version}` : '新建 Skill'}</h3>{editing.revisions?.length > 0 && <label>恢复旧版（先载入编辑器，保存后成为新版本）<select value="" onChange={(event) => { const old = editing.revisions.find((item) => String(item.version) === event.target.value); if (old) setEditing({ ...editing, ...old, version: editing.version, revisions: editing.revisions }) }}><option value="">选择旧版…</option>{[...editing.revisions].reverse().map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.savedAt).toLocaleString()}</option>)}</select></label>}<label>名称<input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label><label>简介<input value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></label><div><label>分类<input value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} /></label><label>标签（逗号分隔）<input value={editing.tags.join(', ')} onChange={(event) => setEditing({ ...editing, tags: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label></div><label>适用范围<select value={editing.scopeProjectId || ''} onChange={(event) => setEditing({ ...editing, scopeProjectId: event.target.value })}><option value="">所有项目</option><option value={projectId}>仅当前项目</option></select></label><label>所需上下文<span className="skill-requires">{Object.entries(names).map(([key, label]) => <label key={key}><input type="checkbox" checked={(editing.requires || []).includes(key)} onChange={(event) => setEditing({ ...editing, requires: event.target.checked ? [...new Set([...(editing.requires || []), key])] : editing.requires.filter((item) => item !== key) })} />{label}</label>)}</span></label><label>输出类型<select value={editing.outputType} onChange={(event) => setEditing({ ...editing, outputType: event.target.value })}><option value="prompt">完整提示词</option><option value="analysis">分析与建议</option></select></label><label>执行指令<textarea value={editing.instruction} onChange={(event) => setEditing({ ...editing, instruction: event.target.value })} placeholder="告诉 AI 如何利用当前上下文完成工作…" /></label><footer><button onClick={() => setEditing(null)}>取消</button><button className="primary" onClick={async () => { await onSave(editing); setEditing(null) }}>保存 Skill</button></footer></section> : <div className="skill-grid">{matches.map((skill) => { const unavailable = missing(skill); return <article key={skill.id} className={unavailable.length ? 'unavailable' : ''}><header><label className="skill-preset-select" title="加入组合"><input type="checkbox" checked={presetSelection.includes(skill.id)} onChange={(event) => setPresetSelection(event.target.checked ? [...presetSelection, skill.id] : presetSelection.filter((id) => id !== skill.id))} /></label><span>{skill.category}</span><button title={skill.favorite ? '取消收藏' : '收藏'} onClick={() => onSave({ ...skill, favorite: !skill.favorite })}>{skill.favorite ? '★' : '☆'}</button></header><h3>{skill.name}</h3><p>{skill.description}</p><div className="skill-tags">{skill.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><small>{sourceName(skill)} · {skill.scopeProjectId ? '仅当前项目' : '所有项目'} · v{skill.version}</small><small>需要：{(skill.requires || []).map((key) => names[key]).join('、') || '无'} · {skill.outputType === 'analysis' ? '分析结果' : '提示词节点'}</small>{unavailable.length ? <em>缺少：{unavailable.map((key) => names[key]).join('、')}</em> : <button className="primary" onClick={() => onUse(skill)}>使用 Skill</button>}<footer><button onClick={() => setEditing({ ...skill, builtIn: false, id: '', name: `${skill.name} 副本`, source: 'local', revisions: [] })}>复制</button>{!skill.builtIn && <button onClick={() => setEditing(skill)}>编辑／回退</button>}<button className="danger" onClick={() => onDelete(skill.id)}>删除</button></footer></article>})}{!matches.length && <p className="skill-empty">没有匹配的 Skill。你可以新建一个，或调整搜索与分类。</p>}</div>}
+    {skillActionNotice && <p className="skill-action-notice" role="status">{skillActionNotice}</p>}
+    {importPreview && <section className="skill-import-preview"><h3>{importPreview.kind === 'json' ? `导入确认：${importPreview.count} 个 Skill` : `导入预览：${importPreview.name}`}</h3><p>{importPreview.kind === 'json' ? `来源：${importPreview.source}。确认后才会写入本机 Skill 库；最多导入前 100 条有效记录。` : `来源：${importPreview.source}。仅导入文字指令；不会运行脚本、安装依赖或访问外部网站。请先检查内容。`}</p><textarea readOnly value={importPreview.kind === 'json' ? importPreview.previewText : importPreview.instruction} />{skillActionError && <p className="skill-action-error" role="alert">操作失败：{skillActionError}</p>}<div><button disabled={skillActionBusy} onClick={() => { setImportPreview(null); setSkillActionError('') }}>取消</button>{importPreview.kind !== 'json' && <button disabled={skillActionBusy} onClick={() => { setEditing(importPreview); setImportPreview(null); setSkillActionError('') }}>检查并编辑</button>}<button className="primary" disabled={skillActionBusy} onClick={confirmSkillImport}>{skillActionBusy ? (importPreview.kind === 'json' ? '正在导入…' : '正在保存…') : '确认导入并保存'}</button></div></section>}
+    {editing ? <section className="skill-editor"><h3>{editing.id ? `编辑：${editing.name} · v${editing.version}` : '新建 Skill'}</h3>{editing.revisions?.length > 0 && <label>恢复旧版（先载入编辑器，保存后成为新版本）<select value="" onChange={(event) => { const old = editing.revisions.find((item) => String(item.version) === event.target.value); if (old) setEditing({ ...editing, ...old, version: editing.version, revisions: editing.revisions }) }}><option value="">选择旧版…</option>{[...editing.revisions].reverse().map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.savedAt).toLocaleString()}</option>)}</select></label>}<label>名称<input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label><label>简介<input value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></label><div><label>分类<input value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} /></label><label>标签（逗号分隔）<input value={editing.tags.join(', ')} onChange={(event) => setEditing({ ...editing, tags: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label></div><label>适用范围<select value={editing.scopeProjectId || ''} onChange={(event) => setEditing({ ...editing, scopeProjectId: event.target.value })}><option value="">所有项目</option><option value={projectId}>仅当前项目</option></select></label><label>所需上下文<span className="skill-requires">{Object.entries(names).map(([key, label]) => <label key={key}><input type="checkbox" checked={(editing.requires || []).includes(key)} onChange={(event) => setEditing({ ...editing, requires: event.target.checked ? [...new Set([...(editing.requires || []), key])] : editing.requires.filter((item) => item !== key) })} />{label}</label>)}</span></label><label>输出类型<select value={editing.outputType} onChange={(event) => setEditing({ ...editing, outputType: event.target.value })}><option value="prompt">完整提示词</option><option value="analysis">分析与建议</option></select></label><label>执行指令<textarea value={editing.instruction} onChange={(event) => setEditing({ ...editing, instruction: event.target.value })} placeholder="告诉 AI 如何利用当前上下文完成工作…" /></label>{skillActionError && <p className="skill-action-error" role="alert">保存失败：{skillActionError}</p>}<footer><button disabled={skillActionBusy} onClick={() => { setEditing(null); setSkillActionError('') }}>取消</button><button className="primary" disabled={skillActionBusy} onClick={saveEditedSkill}>{skillActionBusy ? '正在保存…' : '保存 Skill'}</button></footer></section> : <div className="skill-grid">{matches.map((skill) => { const unavailable = missing(skill); return <article key={skill.id} className={unavailable.length ? 'unavailable' : ''}><header><label className="skill-preset-select" title="加入组合"><input type="checkbox" checked={presetSelection.includes(skill.id)} onChange={(event) => setPresetSelection(event.target.checked ? [...presetSelection, skill.id] : presetSelection.filter((id) => id !== skill.id))} /></label><span>{skill.category}</span><button title={skill.favorite ? '取消收藏' : '收藏'} onClick={() => onSave({ ...skill, favorite: !skill.favorite })}>{skill.favorite ? '★' : '☆'}</button></header><h3>{skill.name}</h3><p>{skill.description}</p><div className="skill-tags">{skill.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><small>{sourceName(skill)} · {skill.scopeProjectId ? '仅当前项目' : '所有项目'} · v{skill.version}</small><small>需要：{(skill.requires || []).map((key) => names[key]).join('、') || '无'} · {skill.outputType === 'analysis' ? '分析结果' : '提示词节点'}</small>{unavailable.length ? <em>缺少：{unavailable.map((key) => names[key]).join('、')}</em> : <button className="primary" onClick={() => onUse(skill)}>使用 Skill</button>}<footer><button onClick={() => setEditing({ ...skill, builtIn: false, id: '', name: `${skill.name} 副本`, source: 'local', revisions: [] })}>复制</button>{!skill.builtIn && <button onClick={() => setEditing(skill)}>编辑／回退</button>}<button className="danger" onClick={() => onDelete(skill.id)}>删除</button></footer></article>})}{!matches.length && <p className="skill-empty">没有匹配的 Skill。你可以新建一个，或调整搜索与分类。</p>}</div>}
   </section></div>
 }
 
@@ -674,7 +857,7 @@ function App() {
   const [vaultLoaded, setVaultLoaded] = useState(false)
   const [projects, setProjects] = useState(loadProjects)
   const [activeProjectId, setActiveProjectId] = useState(() => loadProjects()[0].id)
-  const [drawerOpen, setDrawerOpen] = useState(true)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [selected, setSelected] = useState(null)
   const [multiAngleOpen, setMultiAngleOpen] = useState(false)
   const [multiAnglePreparing, setMultiAnglePreparing] = useState(false)
@@ -695,11 +878,24 @@ function App() {
   const [reverseError, setReverseError] = useState('')
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [canvasSearch, setCanvasSearch] = useState('')
+  const [canvasSearchOpen, setCanvasSearchOpen] = useState(false)
+  const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
+  const [generationInputExpanded, setGenerationInputExpanded] = useState(false)
+  const [generationSettingsOpen, setGenerationSettingsOpen] = useState(false)
+  const [selectedImageMoreOpen, setSelectedImageMoreOpen] = useState(false)
   const [backups, setBackups] = useState([])
   const [showBackups, setShowBackups] = useState(false)
-  const [rightTab, setRightTab] = useState('assistant')
-  const [detailOpen, setDetailOpen] = useState(true)
-  const [detailWidth, setDetailWidth] = useState(() => Number(localStorage.getItem('promptVault.detailWidth')) || 420)
+  const [backupScope, setBackupScope] = useState('all')
+  const [backupSearch, setBackupSearch] = useState('')
+  const [backupPanelPosition, setBackupPanelPosition] = useState({ left: 12, top: 160 })
+  const backupTriggerRef = useRef(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (!settingsOpen) return undefined
+    const onKeyDown = (event) => { if (event.key === 'Escape') setSettingsOpen(false) }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [settingsOpen])
   const [assistantInput, setAssistantInput] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [assistantReferences, setAssistantReferences] = useState([])
@@ -708,17 +904,26 @@ function App() {
   const [assistantGenerationSettings, setAssistantGenerationSettings] = useState({ ...GENERATION_DEFAULTS })
   const [assistantGenerating, setAssistantGenerating] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
+  const chatListRef = useRef(null)
+  useEffect(() => {
+    if (!generationHistoryOpen) return undefined
+    const frame = requestAnimationFrame(() => { if (chatListRef.current) chatListRef.current.scrollTop = chatListRef.current.scrollHeight })
+    return () => cancelAnimationFrame(frame)
+  }, [generationHistoryOpen, chatMessages])
   const [compositionReferences, setCompositionReferences] = useState([])
+  const [compositionPanelOpen, setCompositionPanelOpen] = useState(false)
   const [compositionInstruction, setCompositionInstruction] = useState('')
   const [compositionPromptResult, setCompositionPromptResult] = useState('')
   const [compositionPromptBusy, setCompositionPromptBusy] = useState(false)
   const [compositionPromptError, setCompositionPromptError] = useState('')
+  const [canvasTextGenerationBusy, setCanvasTextGenerationBusy] = useState(false)
   const [imageService, setImageService] = useState({ configured: false, baseUrl: '', model: '', mode: 'openai', generatePath: '/images/generations', editPath: '/images/edits', statusPath: '', cancelPath: '', defaultSize: '1024x1024', downloadDirectory: '', apiKey: '' })
   const [imageServiceMessage, setImageServiceMessage] = useState('')
   const [directoryDialogBusy, setDirectoryDialogBusy] = useState(false)
   const [skills, setSkills] = useState([])
   const [projectAssets, setProjectAssets] = useState([])
   const [projectLoad, setProjectLoad] = useState(null)
+  const [projectReady, setProjectReady] = useState(!window.__TAURI__)
   const [projectDocuments, setProjectDocuments] = useState(() => loadDocuments(activeProjectId))
   const [documentMessage, setDocumentMessage] = useState('')
   const [documentImporting, setDocumentImporting] = useState(false)
@@ -761,22 +966,26 @@ function App() {
   const saveTimer = useRef(null)
   const saveRevisionRef = useRef(0)
   const aiStatusSignatureRef = useRef('')
-  const input = useRef(null)
+
   const projectInput = useRef(null)
   const compositionReferenceInput = useRef(null)
   const assistantReferenceInput = useRef(null)
   const documentInput = useRef(null)
   const uploadMenuRef = useRef(null)
+  const selectedImageMoreRef = useRef(null)
+  const generationSettingsRef = useRef(null)
+  const canvasSearchInputRef = useRef(null)
+  const lastAutoReferenceElementRef = useRef(null)
   const boardRef = useRef(null)
   const canvasSelectionRef = useRef('')
   const nodeHistoryRef = useRef({ past: [], future: [] })
-  const detailResizeRef = useRef(null)
   // Only the active run token may update a node. This prevents an old cancelled
   // network request from turning a newly edited node back into “generating”.
   const generationRunsRef = useRef(new Map())
   const projectSwitchingRef = useRef(false)
   const projectLoadTokenRef = useRef(0)
   const projectHydratingRef = useRef(false)
+  const projectReadyRef = useRef(!window.__TAURI__)
   const assetSyncInFlightRef = useRef(new Set())
 
   // Excalidraw 本身也支持粘贴、拖放和工具栏导入。无论图片从哪条入口进入，
@@ -784,19 +993,24 @@ function App() {
   const syncCanvasFilesToAssets = async (files = sceneRef.current.files, projectId = activeProjectRef.current) => {
     if (!window.__TAURI__ || projectId !== activeProjectRef.current) return 0
     let synced = 0
+    const nextFiles = { ...files }
     for (const [fileId, file] of Object.entries(files || {})) {
       if (!file?.dataURL || file.assetId || assetSyncInFlightRef.current.has(fileId)) continue
       assetSyncInFlightRef.current.add(fileId)
       try {
-        const thumbnailDataUrl = await makeAssetThumbnail(file.dataURL)
-        const record = await invoke('save_project_asset', { projectId, asset: { id: uid(), dataURL: file.dataURL, name: file.name || '画布图片', mimeType: file.mimeType || 'image/png', kind: 'image', tags: ['画布素材'], sourceUrl: null, thumbnailDataUrl } })
-        file.assetId = record.id
+        const preview = await makeCanvasDisplayFile(file)
+        const thumbnailDataUrl = await makeAssetThumbnail(preview.dataURL)
+        const record = await invoke('save_project_asset', { projectId, asset: { id: uid(), dataURL: file.dataURL, previewDataUrl: preview.dataURL !== file.dataURL ? preview.dataURL : undefined, name: file.name || '画布图片', mimeType: file.mimeType || 'image/png', kind: 'image', tags: ['画布素材'], sourceUrl: null, thumbnailDataUrl } })
+        Object.assign(preview, { assetId: record.id })
+        nextFiles[fileId] = { ...file, assetId: record.id, mimeType: file.mimeType || 'image/png', dataURL: undefined }
+        displayFilesRef.current[fileId] = preview
+        api.current?.addFiles([preview])
         synced += 1
       } catch (error) { console.warn('画布素材同步失败', error) }
       finally { assetSyncInFlightRef.current.delete(fileId) }
     }
     if (synced) {
-      sceneRef.current = { ...sceneRef.current, files: { ...sceneRef.current.files, ...files } }
+      sceneRef.current = { ...sceneRef.current, files: { ...sceneRef.current.files, ...nextFiles } }
       persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, sceneRef.current.workflowNodes || [])
       refreshProjectAssets(projectId)
     }
@@ -819,20 +1033,34 @@ function App() {
     const centerX = (boardRef.current?.clientWidth || 900) / 2, centerY = (boardRef.current?.clientHeight || 700) / 2
     const distance = ([id]) => { const element = imageByFile.get(id); return element ? Math.hypot(element.x + element.width / 2 - centerX, element.y + element.height / 2 - centerY) : Infinity }
     const entries = Object.entries(sceneRef.current.files || {}).filter(([id]) => imageByFile.has(id)).sort((a, b) => distance(a) - distance(b))
-    if (!window.__TAURI__ || !entries.length) { if (token === projectLoadTokenRef.current) { projectHydratingRef.current = false; setProjectLoad(null) } return }
+    if (!window.__TAURI__ || !entries.length) { if (token === projectLoadTokenRef.current) { projectHydratingRef.current = false; setProjectLoad(null); projectReadyRef.current = true; setProjectReady(true) } return }
     setProjectLoad({ projectId, loaded: 0, total: entries.length })
     // Show the project immediately; decode and register images one at a time afterward.
     for (const [index, [id, file]] of entries.entries()) {
       if (token !== projectLoadTokenRef.current || projectId !== activeProjectRef.current) return
       try {
-        let original = file
-        if (file?.assetId && !file.dataURL) {
-          const content = await invoke('read_project_asset', { projectId, assetId: file.assetId })
-          original = { ...file, dataURL: content.dataUrl, mimeType: content.asset.mimeType || file.mimeType }
+        let original = file, preview
+        if (file?.assetId) {
+          try {
+            const content = await invoke('read_project_asset_preview', { projectId, assetId: file.assetId })
+            if (content.asset.previewMimeType) preview = { ...file, dataURL: content.dataUrl, mimeType: content.asset.previewMimeType }
+            else {
+              const fullContent = await invoke('read_project_asset', { projectId, assetId: file.assetId })
+              const full = { ...file, dataURL: fullContent.dataUrl, mimeType: fullContent.asset.mimeType || file.mimeType }
+              original = full
+              preview = await makeCanvasDisplayFile(original)
+            }
+          } catch {
+            const content = await invoke('read_project_asset', { projectId, assetId: file.assetId })
+            original = { ...file, dataURL: content.dataUrl, mimeType: content.asset.mimeType || file.mimeType }
+            preview = await makeCanvasDisplayFile(original)
+          }
+        } else {
+          preview = await makeCanvasDisplayFile(original)
         }
-        const preview = await makeCanvasDisplayFile(original)
         if (token !== projectLoadTokenRef.current || projectId !== activeProjectRef.current) return
-        sceneRef.current = { ...sceneRef.current, files: { ...sceneRef.current.files, [id]: original } }
+        const sceneFile = original?.assetId ? { ...file, mimeType: original.mimeType || file.mimeType, dataURL: undefined } : original
+        sceneRef.current = { ...sceneRef.current, files: { ...sceneRef.current.files, [id]: sceneFile } }
         displayFilesRef.current[id] = preview
         if (preview?.dataURL) api.current?.addFiles([preview])
       } catch (error) {
@@ -841,14 +1069,15 @@ function App() {
       if ((index + 1) % 4 === 0 || index === entries.length - 1) setProjectLoad({ projectId, loaded: index + 1, total: entries.length })
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
-    if (token === projectLoadTokenRef.current) { projectHydratingRef.current = false; setProjectLoad(null) }
+    if (token === projectLoadTokenRef.current) { projectHydratingRef.current = false; setProjectLoad(null); projectReadyRef.current = true; setProjectReady(true) }
   }
-  const storeProjectAsset = async ({ id = uid(), dataURL, name = '画布图片', mimeType = 'image/png', kind = 'image', tags = [], sourceUrl = null }) => {
-    if (!window.__TAURI__) return { id, assetId: null, thumbnailDataUrl: null }
-    const thumbnailDataUrl = await makeAssetThumbnail(dataURL)
-    const record = await invoke('save_project_asset', { projectId: activeProjectRef.current, asset: { id, dataURL, name, mimeType, kind, tags, sourceUrl, thumbnailDataUrl } })
-    refreshProjectAssets()
-    return { ...record, assetId: record.id }
+  const storeProjectAsset = async ({ id = uid(), dataURL, name = '画布图片', mimeType = 'image/png', kind = 'image', tags = [], sourceUrl = null, projectId = activeProjectRef.current }) => {
+    const preview = await makeCanvasDisplayFile({ id, dataURL, name, mimeType })
+    if (!window.__TAURI__) return { id, assetId: null, thumbnailDataUrl: null, previewDataURL: preview.dataURL }
+    const thumbnailDataUrl = await makeAssetThumbnail(preview.dataURL)
+    const record = await invoke('save_project_asset', { projectId, asset: { id, dataURL, previewDataUrl: preview.dataURL !== dataURL ? preview.dataURL : undefined, name, mimeType, kind, tags, sourceUrl, thumbnailDataUrl } })
+    if (projectId === activeProjectRef.current) refreshProjectAssets(projectId)
+    return { ...record, assetId: record.id, previewDataURL: preview.dataURL }
   }
 
   const renderWorkflowOnFrame = (nodes) => {
@@ -876,20 +1105,6 @@ function App() {
   }, [viewport])
   useEffect(() => () => { clearTimeout(viewportSettleTimerRef.current); if (viewportFrameRef.current) cancelAnimationFrame(viewportFrameRef.current) }, [])
 
-  const beginDetailResize = (event) => {
-    detailResizeRef.current = { startX: event.clientX, width: detailWidth }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-    event.preventDefault()
-  }
-  const resizeDetail = (event) => {
-    if (!detailResizeRef.current) return
-    const width = Math.max(340, Math.min(560, detailResizeRef.current.width + detailResizeRef.current.startX - event.clientX))
-    setDetailWidth(width)
-  }
-  const endDetailResize = () => {
-    if (!detailResizeRef.current) return
-    detailResizeRef.current = null
-  }
   useEffect(() => {
     if (!uploadMenuOpen) return undefined
     const close = (event) => {
@@ -901,6 +1116,49 @@ function App() {
     document.addEventListener('keydown', close)
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
   }, [uploadMenuOpen])
+  useEffect(() => {
+    if (!selectedImageMoreOpen) return undefined
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && selectedImageMoreRef.current?.contains(event.target)) return
+      setSelectedImageMoreOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
+  }, [selectedImageMoreOpen])
+  useEffect(() => {
+    if (!generationSettingsOpen) return undefined
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && generationSettingsRef.current?.contains(event.target)) return
+      setGenerationSettingsOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
+  }, [generationSettingsOpen])
+  useEffect(() => {
+    if (!canvasSearchOpen) return undefined
+    requestAnimationFrame(() => canvasSearchInputRef.current?.focus())
+    const close = (event) => {
+      if (event.key !== 'Escape') return
+      setCanvasSearchOpen(false)
+    }
+    document.addEventListener('keydown', close)
+    return () => document.removeEventListener('keydown', close)
+  }, [canvasSearchOpen])
+  useEffect(() => {
+    if (!settingsOpen) return undefined
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && event.target.closest?.('.image-service-settings-dialog, .image-service-settings-backdrop, .settings-trigger')) return
+      setSettingsOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
+  }, [settingsOpen])
 
   const chatKey = (projectId) => `promptVault.promptAssistant.${projectId}`
   const chatHistoryKey = (projectId) => `promptVault.promptAssistantHistory.${projectId}`
@@ -995,6 +1253,8 @@ function App() {
   const selectProject = async (projectId) => {
     if (projectId === activeProjectRef.current && !projectSwitchingRef.current) return
     const token = ++projectLoadTokenRef.current
+    projectReadyRef.current = false
+    setProjectReady(false)
     setProjectLoad({ projectId, loaded: 0, total: 0 })
     // 插件收件箱是全局队列；加载项目期间绝不能提前取走图片并写入旧项目。
     projectSwitchingRef.current = true
@@ -1031,10 +1291,19 @@ function App() {
   useEffect(() => {
     if (!window.__TAURI__) return
     invoke('read_canvas_scene', { projectId: activeProjectRef.current }).then(async (raw) => {
-      if (!raw) return
       if (projectLoadTokenRef.current !== 0) return
+      if (!raw) {
+        const token = ++projectLoadTokenRef.current
+        projectHydratingRef.current = true
+        projectReadyRef.current = false
+        setProjectReady(false)
+        requestAnimationFrame(() => { if (token === projectLoadTokenRef.current) void hydrateSceneAssets(activeProjectRef.current, token) })
+        return
+      }
       const token = ++projectLoadTokenRef.current
       projectHydratingRef.current = true
+      projectReadyRef.current = false
+      setProjectReady(false)
       const nextScene = normalizeScene(JSON.parse(raw))
       displayFilesRef.current = {}
       sceneRef.current = nextScene; setWorkflowNodes(nextScene.workflowNodes || [])
@@ -1058,7 +1327,6 @@ function App() {
   }, [])
   const refreshSkills = () => invoke('list_skills').then((items) => setSkills(items)).catch((error) => console.warn('Skill 库读取失败', error))
   useEffect(() => { refreshSkills() }, [])
-  useEffect(() => { localStorage.setItem('promptVault.detailWidth', String(detailWidth)) }, [detailWidth])
   useEffect(() => {
     const saveNow = () => flushPersist()
     window.addEventListener('pagehide', saveNow)
@@ -1113,7 +1381,20 @@ function App() {
     } catch (error) { alert(`导入失败：${String(error.message || error)}`) }
   }
   const loadBackups = async () => {
-    try { setBackups(await invoke('list_canvas_backups')); setShowBackups(true) } catch (error) { alert(`读取备份失败：${String(error)}`) }
+    const anchor = backupTriggerRef.current?.getBoundingClientRect()
+    if (anchor) {
+      const panelWidth = Math.min(390, Math.max(240, window.innerWidth - 24))
+      setBackupPanelPosition({
+        left: Math.max(12, Math.min(anchor.left, window.innerWidth - panelWidth - 12)),
+        top: Math.min(anchor.bottom + 6, Math.max(12, window.innerHeight - 180))
+      })
+    }
+    try {
+      setBackups(await invoke('list_canvas_backups'))
+      setBackupSearch('')
+      setBackupScope('all')
+      setShowBackups(true)
+    } catch (error) { alert('读取备份失败：' + String(error)) }
   }
   const restoreBackup = async (name) => {
     if (!window.confirm('将此备份恢复为一个新项目？当前项目不会被覆盖。')) return
@@ -1130,21 +1411,70 @@ function App() {
     if (!window.confirm('删除这份历史备份？')) return
     try { await invoke('delete_canvas_backup', { name }); await loadBackups() } catch (error) { alert(`删除失败：${String(error)}`) }
   }
-  useEffect(() => {
-    if (!window.__TAURI__) return undefined
-    const backup = () => {
-      const project = projects.find((item) => item.id === activeProjectRef.current)
-      invoke('backup_canvas_project', { projectName: project?.name || '未命名项目', data: JSON.stringify({ format: 'prompt-vault-canvas', version: 3, savedAt: Date.now(), project: { ...project, scene: normalizeScene(sceneRef.current), documents: loadDocuments(activeProjectRef.current) } }) }).catch((error) => console.warn('自动备份失败', error))
+  const backupGroups = useMemo(() => {
+    const currentProject = projects.find((project) => project.id === activeProjectId)
+    const query = backupSearch.trim().toLocaleLowerCase()
+    const groups = new Map()
+    for (const backup of backups) {
+      const projectId = typeof backup.projectId === 'string' ? backup.projectId : ''
+      const knownProject = projectId ? projects.find((project) => project.id === projectId) : null
+      const fallbackName = String(backup.name || '').replace(/-\d{8}-\d{6}\.prompt-canvas\.json$/, '').replace(/\.prompt-canvas\.json$/, '')
+      const projectName = String(backup.projectName || knownProject?.name || fallbackName || '未命名项目').trim() || '未命名项目'
+      const isCurrent = projectId ? projectId === activeProjectId : Boolean(currentProject && projectName === currentProject.name)
+      if (backupScope === 'current' && !isCurrent) continue
+      if (query && !(projectName + ' ' + String(backup.name || '') + ' ' + projectId).toLocaleLowerCase().includes(query)) continue
+      const key = projectId ? 'id:' + projectId : 'name:' + projectName
+      if (!groups.has(key)) groups.set(key, { key, projectId, projectName, isCurrent, backups: [] })
+      groups.get(key).backups.push(backup)
     }
-    const timer = setInterval(backup, 5 * 60 * 1000)
-    const initial = setTimeout(backup, 8000)
-    return () => { clearInterval(timer); clearTimeout(initial) }
-  }, [projects])
-  const selectedFile = useMemo(() => selected?.type === 'image' ? (selected.file || sceneRef.current.files[selected.fileId]) : null, [selected])
+    return Array.from(groups.values()).map((group) => ({
+      ...group,
+      backups: group.backups.sort((left, right) => Number(right.modifiedAt || 0) - Number(left.modifiedAt || 0))
+    })).sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent) || Number(right.backups[0]?.modifiedAt || 0) - Number(left.backups[0]?.modifiedAt || 0))
+  }, [backups, backupScope, backupSearch, projects, activeProjectId])
+  const formatBackupSize = (bytes) => {
+    const value = Math.max(0, Number(bytes) || 0)
+    if (value >= 1024 ** 3) return (value / (1024 ** 3)).toFixed(1) + ' GB'
+    if (value >= 1024 ** 2) return (value / (1024 ** 2)).toFixed(value >= 10 * (1024 ** 2) ? 0 : 1) + ' MB'
+    return Math.max(1, Math.round(value / 1024)) + ' KB'
+  }
+  useEffect(() => {
+    if (!window.__TAURI__ || !projectReady) return undefined
+    const backup = () => {
+      if (!projectReadyRef.current || projectSwitchingRef.current || projectHydratingRef.current) return
+      const projectId = activeProjectRef.current
+      const project = projects.find((item) => item.id === projectId)
+      if (!project) return
+      invoke('backup_canvas_project', { projectId: project.id, projectName: project.name || '未命名项目', data: JSON.stringify({ format: 'prompt-vault-canvas', version: 3, savedAt: Date.now(), project: { ...project, scene: normalizeScene(sceneRef.current), documents: loadDocuments(projectId) } }) }).catch((error) => console.warn('自动备份失败', error))
+    }
+    let timer = null
+    const initial = setTimeout(() => { backup(); timer = setInterval(backup, 5 * 60 * 1000) }, 30 * 1000)
+    return () => { if (timer) clearInterval(timer); clearTimeout(initial) }
+  }, [projects, projectReady, activeProjectId])
+  const canvasFileFor = (fileId, fallback = null) => {
+    const metadata = sceneRef.current.files?.[fileId] || fallback
+    const preview = displayFilesRef.current[fileId]
+    if (!preview?.dataURL) return metadata || fallback
+    return { ...metadata, ...preview, id: fileId, assetId: metadata?.assetId || preview.assetId, dataURL: preview.dataURL, mimeType: preview.mimeType || metadata?.mimeType }
+  }
+  const readOriginalFile = async (fileOrId) => {
+    const fileId = typeof fileOrId === 'string' ? fileOrId : fileOrId?.id
+    const metadata = sceneRef.current.files?.[fileId] || (typeof fileOrId === 'object' ? fileOrId : null)
+    const preview = displayFilesRef.current[fileId]
+    if (metadata?.assetId && window.__TAURI__) {
+      const content = await invoke('read_project_asset', { projectId: activeProjectRef.current, assetId: metadata.assetId })
+      return { ...metadata, id: fileId, dataURL: content.dataUrl, mimeType: content.asset.mimeType || metadata.mimeType }
+    }
+    if (metadata?.dataURL && metadata.dataURL !== preview?.dataURL) return metadata
+    if (typeof fileOrId === 'object' && fileOrId?.dataURL && fileOrId.dataURL !== preview?.dataURL && !fileOrId.assetId) return fileOrId
+    return canvasFileFor(fileId, metadata)
+  }
+  const selectedFile = useMemo(() => selected?.type === 'image' ? canvasFileFor(selected.fileId || selected.file?.id, selected.file) : null, [selected])
   const syncSelectedFileToAssets = async () => {
     if (!selectedFile?.dataURL || selectedFile.assetId) return 0
     const fileId = selected?.fileId || selectedFile.id || uid()
-    const files = { ...sceneRef.current.files, [fileId]: { ...selectedFile, id: selectedFile.id || fileId } }
+    const sourceFile = sceneRef.current.files[fileId] || selectedFile
+    const files = { ...sceneRef.current.files, [fileId]: { ...sourceFile, id: sourceFile.id || fileId } }
     sceneRef.current = { ...sceneRef.current, files }
     return syncCanvasFilesToAssets(files)
   }
@@ -1152,8 +1482,8 @@ function App() {
   const selectedCanvasPrompt = useMemo(() => selectedCanvasElements.filter((element) => element.type === 'text').map((element) => element.text || '').join('\n').trim(), [selectedCanvasElements])
   const selectedProductElements = useMemo(() => selectedCanvasElements.filter((element) => element.type === 'image' && element.fileId), [selectedCanvasElements])
   const selectedProductReferences = useMemo(() => selectedProductElements.map((element) => {
-    const file = sceneRef.current.files[element.fileId]
-    return file?.dataURL ? { id: element.id, dataURL: file.dataURL, name: `画布产品图`, mimeType: file.mimeType || 'image/png', role: '产品外观' } : null
+    const file = canvasFileFor(element.fileId)
+    return file?.dataURL ? { id: element.id, fileId: element.fileId, assetId: file.assetId, dataURL: file.dataURL, name: `画布产品图`, mimeType: file.mimeType || 'image/png', role: '产品外观' } : null
   }).filter(Boolean), [selectedProductElements, workflowNodes])
   const canComposeGeneration = Boolean(selectedCanvasPrompt && selectedProductReferences.length)
   const blenderReferencePair = useMemo(() => {
@@ -1162,7 +1492,7 @@ function App() {
     const node = workflowNodes.find((item) => item.kind === 'blender' && images.some((image) => image.id === item.sourceElementId))
     if (!node) return null
     const referenceElement = images.find((image) => image.id !== node.sourceElementId)
-    const referenceFile = referenceElement?.fileId ? sceneRef.current.files[referenceElement.fileId] : null
+    const referenceFile = referenceElement?.fileId ? canvasFileFor(referenceElement.fileId) : null
     return referenceFile?.dataURL ? { node, referenceElement, referenceFile } : null
   }, [selectedCanvasElements, workflowNodes])
   useEffect(() => {
@@ -1256,29 +1586,35 @@ function App() {
     event.preventDefault()
     event.stopPropagation()
     const center = visibleCanvasCenter()
-    const element = convertToExcalidrawElements([{ type: 'text', text: wrapPastedPromptForCanvas(normalized), x: center.x, y: center.y, fontSize: 20 }])[0]
+    const element = convertToExcalidrawElements([{ type: 'text', text: wrapPastedPromptForCanvas(normalized), x: center.x, y: center.y, fontSize: 20, fontFamily: CANVAS_TEXT_FONT_FAMILY }])[0]
     api.current.updateScene({ elements: [...sceneRef.current.elements, element], appState: { selectedElementIds: { [element.id]: true } } })
   }
   const importFiles = async (list, dropPoint = null) => {
-    const imageFiles = [...list].filter((file) => file.type.startsWith('image/'))
+    const imageFiles = [...list].filter((file) => (file.type || file.mimeType || '').startsWith('image/'))
     if (!imageFiles.length) return
     const anchor = dropPoint || visibleCanvasCenter()
-    const items = await Promise.all(imageFiles.map(async (file, index) => {
-      const dataURL = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
+    const items = []
+    for (const [index, file] of imageFiles.entries()) {
+      const dataURL = file.dataURL || await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
       const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = dataURL })
       const fileId = uid(), scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight))
       const width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale)
-      const asset = await storeProjectAsset({ id: fileId, dataURL, name: file.name || '导入图片', mimeType: file.type || 'image/png', kind: 'image' })
+      image.src = ''
+      const mimeType = file.type || file.mimeType || 'image/png'
+      const asset = await storeProjectAsset({ id: fileId, dataURL, name: file.name || '导入图片', mimeType, kind: 'image' })
+      const metadata = { id: fileId, assetId: asset.assetId, mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+      const sceneFile = asset.assetId ? metadata : { ...metadata, dataURL }
+      const preview = { ...metadata, dataURL: asset.previewDataURL || (await makeCanvasDisplayFile({ ...metadata, dataURL })).dataURL, mimeType: asset.previewDataURL ? 'image/webp' : mimeType }
       // Keep multiple dropped files visible rather than perfectly stacked.
       const offset = index * 36
-      return { fileId, file: { id: fileId, assetId: asset.assetId, dataURL, mimeType: file.type, created: Date.now(), lastRetrieved: Date.now(), version: 1 }, element: { id: uid(), type: 'image', x: Math.round(anchor.x - width / 2 + offset), y: Math.round(anchor.y - height / 2 + offset), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null } }
-    }))
+      items.push({ fileId, file: sceneFile, preview, element: { id: uid(), type: 'image', x: Math.round(anchor.x - width / 2 + offset), y: Math.round(anchor.y - height / 2 + offset), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null } })
+    }
     const current = sceneRef.current, files = { ...current.files }
     items.forEach((item) => { files[item.fileId] = item.file })
     const elements = [...current.elements, ...items.map((item) => item.element)]
     sceneRef.current = { ...current, elements, files }
     // updateScene 不会接管二进制文件；必须先注册到 Excalidraw 的文件仓库，否则只显示占位图。
-    const displayFiles = await Promise.all(items.map((item) => makeCanvasDisplayFile(item.file)))
+    const displayFiles = items.map((item) => item.preview)
     displayFiles.forEach((file) => { displayFilesRef.current[file.id] = file })
     api.current?.addFiles(displayFiles)
     api.current?.updateScene({ elements })
@@ -1286,17 +1622,36 @@ function App() {
   }
   const placeProjectAsset = async (asset) => {
     try {
-      const content = await invoke('read_project_asset', { projectId: activeProjectRef.current, assetId: asset.id })
-      const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = content.dataUrl })
+      const file = { id: asset.id, assetId: asset.id, mimeType: asset.mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+      let displayFile
+      try {
+        const content = await invoke('read_project_asset_preview', { projectId: activeProjectRef.current, assetId: asset.id })
+        if (content.asset.previewMimeType) displayFile = { ...file, dataURL: content.dataUrl, mimeType: content.asset.previewMimeType }
+        else {
+          const original = await invoke('read_project_asset', { projectId: activeProjectRef.current, assetId: asset.id })
+          displayFile = await makeCanvasDisplayFile({ ...file, dataURL: original.dataUrl, mimeType: original.asset.mimeType || file.mimeType })
+        }
+      } catch {
+        const original = await invoke('read_project_asset', { projectId: activeProjectRef.current, assetId: asset.id })
+        displayFile = await makeCanvasDisplayFile({ ...file, dataURL: original.dataUrl, mimeType: original.asset.mimeType || file.mimeType })
+      }
+      const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = displayFile.dataURL })
       const point = visibleCanvasCenter(), scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight)), width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale)
-      const file = { id: asset.id, assetId: asset.id, dataURL: content.dataUrl, mimeType: asset.mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+      image.src = ''
       const element = { id: uid(), type: 'image', x: Math.round(point.x - width / 2), y: Math.round(point.y - height / 2), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: asset.sourceUrl || null, locked: false, fileId: asset.id, status: 'saved', scale: [1, 1], crop: null }
       const current = sceneRef.current, files = { ...current.files, [asset.id]: file }, elements = [...current.elements, element]
-      const displayFile = await makeCanvasDisplayFile(file)
       displayFilesRef.current[file.id] = displayFile
       sceneRef.current = { ...current, files, elements }; api.current?.addFiles([displayFile]); api.current?.updateScene({ elements }); persist(elements, current.appState || emptyScene.appState, files)
       setAssetDrawerOpen(false)
     } catch (error) { alert(`放回画布失败：${errorMessage(error)}`) }
+  }
+  const downloadProjectAsset = async (asset) => {
+    if (!window.__TAURI__ || !asset?.id) return
+    try {
+      const content = await invoke('read_project_asset', { projectId: activeProjectRef.current, assetId: asset.id })
+      const result = await invoke('save_generation_original', { source: content.dataUrl })
+      alert(`素材原图已下载到：${result.path}`)
+    } catch (error) { alert(`素材下载失败：${errorMessage(error)}`) }
   }
   useEffect(() => {
     if (!window.__TAURI__) return undefined
@@ -1307,15 +1662,16 @@ function App() {
       try {
         const dropped = await invoke('read_dropped_images', { paths: event.payload.paths })
         if (disposed || !dropped.length) return
-        const files = await Promise.all(dropped.map(async (item) => {
-          const blob = await (await fetch(item.dataUrl)).blob()
-          return new File([blob], item.name, { type: item.mimeType })
-        }))
         // Tauri reports physical pixels; DOM coordinates are CSS pixels.
         const scale = window.devicePixelRatio || 1
         const position = event.payload.position
         const dropPoint = position ? clientPointToCanvas(position.x / scale, position.y / scale) : null
-        await importFiles(files, dropPoint)
+        for (const [index, item] of dropped.entries()) {
+          if (disposed) return
+          const dataURL = item.dataUrl
+          try { await importFiles([{ name: item.name, mimeType: item.mimeType, dataURL }], dropPoint ? { x: dropPoint.x + index * 36, y: dropPoint.y + index * 36 } : null) }
+          finally { item.dataUrl = '' }
+        }
       } catch (error) {
         console.error('原生拖放导入失败', error)
       }
@@ -1344,8 +1700,10 @@ function App() {
   }
   const copyImage = async () => {
     if (!selectedFile) return
+    const original = await readOriginalFile(selectedFile)
+    if (!original?.dataURL) throw new Error('找不到图片原图数据')
     // Windows WebView 的 ClipboardItem 只稳定支持 image/png；JPG/WebP 必须先转码。
-    const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = () => reject(new Error('图片无法解码')); source.src = selectedFile.dataURL })
+    const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = () => reject(new Error('图片无法解码')); source.src = original.dataURL })
     const canvas = document.createElement('canvas')
     canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
     canvas.getContext('2d').drawImage(image, 0, 0)
@@ -1377,12 +1735,12 @@ function App() {
       await openExternalUrl('https://www.pinterest.com/')
     } catch (error) { alert(`以图搜图启动失败：${errorMessage(error)}`) }
   }
-  const addPromptNode = (prompt, model, mode = 'reverse', source = selected, usedTemplate = null, parentNodeId = null) => {
+  const addPromptNode = (prompt, model, mode = 'reverse', source = selected, usedTemplate = null, parentNodeId = null, nodeOptions = {}) => {
     if (!source || source.type !== 'image') return
     recordNodeHistory()
     const isModify = mode === 'modify', nodeX = source.x + source.width + 160, nodeY = isModify ? source.y + source.height + 120 : source.y
     const template = aiStatus?.promptTemplates?.find((item) => item.id === selectedTemplateId)
-    const node = { id: uid(), kind: isModify ? 'modify' : 'prompt', sourceElementId: source.id, parentNodeId, x: nodeX, y: nodeY, width: 620, height: isModify ? 660 : 560, model, templateId: usedTemplate?.id || selectedTemplateId, templateLabel: usedTemplate?.label || template?.label || '默认视觉反推模板', prompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: [], versionHistory: [], ...GENERATION_DEFAULTS }
+    const node = { id: uid(), kind: isModify ? 'modify' : 'prompt', sourceElementId: source.id, parentNodeId, x: nodeX, y: nodeY, width: 620, height: isModify ? 660 : 560, model, templateId: usedTemplate?.id || selectedTemplateId, templateLabel: usedTemplate?.label || template?.label || '默认视觉反推模板', prompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: [], versionHistory: [], ...GENERATION_DEFAULTS, ...nodeOptions }
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
@@ -1392,11 +1750,12 @@ function App() {
   const createCompositionNode = (promptOverride = '', promptReferenceImages = []) => {
     if (!canComposeGeneration) { alert('请同时选中至少一段提示词文本和一张产品参考图。'); return null }
     const source = selectedProductElements[0]
+    const compositionTemplate = aiStatus?.promptTemplates?.find((item) => item.id === selectedTemplateId)
     recordNodeHistory()
     const node = {
       id: uid(), kind: 'compose', sourceElementId: source.id, parentNodeId: null,
-      x: source.x + source.width + 160, y: source.y, width: 620, height: 520,
-      model: imageService.model || '当前生图模型', templateId: '', templateLabel: '画布组合生图',
+      x: source.x + source.width + 160, y: source.y, width: 523, height: 374,
+      model: imageService.model || '当前生图模型', templateId: selectedTemplateId || '', templateLabel: compositionTemplate?.label || '人车真实场景摄影',
       prompt: promptOverride.trim() || selectedCanvasPrompt, instruction: compositionInstruction.trim(), output: '', busy: false, status: 'completed',
       referenceImages: selectedProductReferences, promptReferenceImages, versionHistory: [], ...GENERATION_DEFAULTS,
     }
@@ -1405,6 +1764,30 @@ function App() {
     setWorkflowNodes(nodes); setSelectedNodeIds([node.id])
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     return node
+  }
+  const generateSelectedCanvasText = async () => {
+    const prompt = selectedCanvasPrompt.trim()
+    const source = selectedCanvasElements.find((element) => element.type === 'text' && (element.text || '').trim())
+    if (!prompt || !source || canvasTextGenerationBusy) return
+    if (!imageService.configured) return alert('请先完成图像服务设置。')
+    setCanvasTextGenerationBusy(true)
+    recordNodeHistory()
+    const node = {
+      id: uid(), kind: 'prompt', sourceElementId: source.id, parentNodeId: null,
+      x: source.x + source.width + 140, y: source.y, width: 620, height: 560,
+      model: imageService.model || '当前生图模型', templateId: 'manual', templateLabel: '画布纯提示词测试',
+      prompt, instruction: '', output: prompt, busy: false, status: 'completed',
+      ...GENERATION_DEFAULTS,
+      referenceImages: [], versionHistory: [], generationTextOnly: true, productConsistency: false,
+    }
+    const nodes = [...(sceneRef.current.workflowNodes || []), node]
+    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
+    setWorkflowNodes(nodes)
+    setSelectedNodeIds([node.id])
+    persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+    try { await generatePreview(node, { textOnly: true }) }
+    catch (error) { alert(`纯提示词生图失败：${errorMessage(error)}`) }
+    finally { setCanvasTextGenerationBusy(false) }
   }
   const generateComposition = (promptOverride = '', promptReferenceImages = []) => {
     if (!imageService.configured) return alert('请先完成图像服务设置。')
@@ -1417,7 +1800,12 @@ function App() {
     const remaining = Math.max(0, 8 - compositionReferences.length)
     if (!remaining) return setCompositionPromptError('最多只能添加 8 张额外参考图。')
     try {
-      const additions = await Promise.all(files.slice(0, remaining).map(async (file) => ({ id: uid(), dataURL: await readImageFile(file), name: file.name, mimeType: file.type || 'image/png', role: '场景、构图或风格参考' })))
+      const additions = []
+      for (const file of files.slice(0, remaining)) {
+        const rawDataURL = await readImageFile(file), id = uid()
+        const preview = await makeCanvasDisplayFile({ id, dataURL: rawDataURL, name: file.name, mimeType: file.type || 'image/png' })
+        additions.push({ id, dataURL: preview.dataURL, name: file.name, mimeType: preview.mimeType || file.type || 'image/png', role: '场景、构图或风格参考' })
+      }
       setCompositionReferences((current) => [...current, ...additions].slice(0, 8))
       setCompositionPromptError('')
     } catch (error) { setCompositionPromptError(errorMessage(error, '参考图读取失败，请重试')) }
@@ -1427,14 +1815,41 @@ function App() {
   const addAssistantReferences = async (fileList) => {
     const files = [...(fileList || [])].filter((file) => file?.type?.startsWith('image/'))
     if (!files.length) return
+    const targetProjectId = activeProjectRef.current
     const remaining = Math.max(0, 8 - assistantReferences.length)
     if (!remaining) return alert('最多只能添加 8 张参考图。')
     try {
-      const additions = await Promise.all(files.slice(0, remaining).map(async (file, index) => ({ id: uid(), dataURL: await readImageFile(file), name: file.name, mimeType: file.type || 'image/png', role: index === 0 && !assistantReferences.length ? '本次修改的原图，保持未提及内容不变' : '补充参考图' })))
+      const additions = []
+      for (const [index, file] of files.slice(0, remaining).entries()) {
+        const rawDataURL = await readImageFile(file), id = uid()
+        const preview = await makeCanvasDisplayFile({ id, dataURL: rawDataURL, name: file.name, mimeType: file.type || 'image/png' })
+        additions.push({ id, dataURL: preview.dataURL, sourceFile: file, name: file.name, mimeType: preview.mimeType || file.type || 'image/png', role: '画面参考' })
+      }
+      if (targetProjectId !== activeProjectRef.current) return
       setAssistantReferences((current) => [...current, ...additions].slice(0, 8))
     } catch (error) { alert(errorMessage(error, '参考图读取失败，请重试')) }
   }
   const removeAssistantReference = (id) => setAssistantReferences((current) => current.filter((item) => item.id !== id))
+  useEffect(() => {
+    if (selected?.type !== 'image' || !selected?.file?.dataURL) return
+    if (lastAutoReferenceElementRef.current === selected.id) return
+    lastAutoReferenceElementRef.current = selected.id
+    const canvasReference = {
+      id: `canvas-reference-${selected.id}`,
+      dataURL: selected.file.dataURL,
+      name: selected.file.name || '画布选中图片',
+      mimeType: selected.file.mimeType || 'image/png',
+      role: '画布图片参考',
+      canvasElementId: selected.id,
+      fileId: selected.fileId || selected.file.id,
+      assetId: selected.file.assetId || null,
+    }
+    setAssistantReferences((current) => [canvasReference, ...current.filter((item) => !item.canvasElementId)].slice(0, 8))
+  }, [selected?.id, selected?.type, selected?.file?.dataURL, selected?.fileId])
+  useEffect(() => {
+    lastAutoReferenceElementRef.current = null
+    setAssistantReferences([])
+  }, [activeProjectId])
   const generateFromAssistantReferences = async (promptOverride = '', settingsOverride = null, chatBase = null) => {
     const prompt = (typeof promptOverride === 'string' && promptOverride.trim() ? promptOverride : assistantInput).trim()
     if (!prompt || !assistantReferences.length || assistantGenerating) return
@@ -1443,20 +1858,25 @@ function App() {
     const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
     const center = { x: -(viewportRef.current.scrollX || 0) + (boardRef.current?.clientWidth || 900) / (2 * zoom), y: -(viewportRef.current.scrollY || 0) + (boardRef.current?.clientHeight || 700) / (2 * zoom) }
     setAssistantGenerating(true)
-    let canvasReferences
+    const canvasReferences = []
     try {
-      canvasReferences = await Promise.all(references.map(async (reference, index) => {
+      for (const [index, reference] of references.entries()) {
         const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = reference.dataURL })
         const fileId = uid(), scale = Math.min(1, 520 / Math.max(image.naturalWidth, image.naturalHeight)), width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale)
+        image.src = ''
         const asset = await storeProjectAsset({ id: fileId, dataURL: reference.dataURL, name: reference.name || `助手参考图 ${index + 1}`, mimeType: reference.mimeType || 'image/png', kind: 'image', tags: ['助手参考图'] })
-        const file = { id: fileId, assetId: asset.assetId, dataURL: reference.dataURL, mimeType: reference.mimeType || 'image/png', created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+        const file = { id: fileId, assetId: asset.assetId, ...(asset.assetId ? {} : { dataURL: reference.dataURL }), mimeType: reference.mimeType || 'image/png', created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+        const preview = { ...file, dataURL: asset.previewDataURL || (await makeCanvasDisplayFile({ ...file, dataURL: reference.dataURL })).dataURL, mimeType: asset.previewDataURL ? 'image/webp' : file.mimeType }
+        const canvasReference = { ...reference, fileId: file.id, assetId: file.assetId, dataURL: preview.dataURL, mimeType: preview.mimeType || reference.mimeType || 'image/png' }
         const element = { id: uid(), type: 'image', x: Math.round(center.x - width / 2 + index * 36), y: Math.round(center.y - height / 2 + index * 36), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null, customData: { assistantReference: true } }
-        return { file, element }
-      }))
+        canvasReferences.push({ file, element, preview, reference: canvasReference })
+      }
     } catch (error) { setAssistantGenerating(false); return alert(`参考图转入画布失败：${errorMessage(error)}`) }
+    references.length = 0
     const sourceElement = canvasReferences[0].element
     const constrainedPrompt = assistantMode === 'agent' ? `${AGENT_CONSTRAINED_EDIT_INSTRUCTION}\n\n${prompt}` : prompt
-    const node = { id: uid(), kind: 'prompt', sourceElementId: sourceElement.id, parentNodeId: null, x: sourceElement.x + sourceElement.width + 160, y: sourceElement.y, width: 620, height: 560, model: imageService.model || '当前生图模型', templateId: '', templateLabel: assistantMode === 'agent' ? 'Agent 受约束编辑' : '助手参考图生成', prompt: constrainedPrompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: references, generationEditImage: assistantMode === 'agent' ? references[0] : null, versionHistory: [], ...GENERATION_DEFAULTS, ...assistantGenerationSettings, ...(settingsOverride || {}), productConsistency: true }
+    const previewReferences = canvasReferences.map(({ reference }) => reference)
+    const node = { id: uid(), kind: 'prompt', sourceElementId: sourceElement.id, parentNodeId: null, x: sourceElement.x + sourceElement.width + 160, y: sourceElement.y, width: 620, height: 560, model: imageService.model || '当前生图模型', templateId: '', templateLabel: assistantMode === 'agent' ? 'Agent 受约束编辑' : '助手参考图生成', prompt: constrainedPrompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: previewReferences, generationEditImage: assistantMode === 'agent' ? previewReferences[0] : null, versionHistory: [], ...GENERATION_DEFAULTS, ...assistantGenerationSettings, ...(settingsOverride || {}), productConsistency: true }
     recordNodeHistory()
     const files = { ...sceneRef.current.files }
     canvasReferences.forEach(({ file }) => { files[file.id] = file })
@@ -1464,18 +1884,103 @@ function App() {
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, elements, files, workflowNodes: nodes }
     setWorkflowNodes(nodes); setSelectedNodeIds([node.id])
-    const displayFiles = await Promise.all(canvasReferences.map(({ file }) => makeCanvasDisplayFile(file)))
+    const displayFiles = canvasReferences.map(({ preview }) => preview)
     displayFiles.forEach((file) => { displayFilesRef.current[file.id] = file })
     api.current?.addFiles(displayFiles)
     api.current?.updateScene({ elements, appState: { selectedElementIds: { [sourceElement.id]: true } } })
-    setSelected({ ...sourceElement, file: canvasReferences[0].file }); setSelectedCanvasIds([sourceElement.id]); setAssistantReferences([])
+    setSelected({ ...sourceElement, file: canvasReferences[0].preview }); setSelectedCanvasIds([sourceElement.id]); setAssistantReferences([])
     persist(elements, sceneRef.current.appState || emptyScene.appState, files, nodes)
     const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
-    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - node.width / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
+    const nodeWidth = workflowNodeDimensions(node).width
+    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - nodeWidth / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
     const user = { id: uid(), role: 'user', text: prompt, createdAt: Date.now(), nodeId: node.id }
     saveChat([...(chatBase || chatMessages), user, { id: uid(), role: 'assistant', text: `已将讨论方案整理为最终提示词，并按 ${node.generationAspect} · ${node.generationQuality} · ${node.generationCount} 张启动生成。`, model: imageService.model, source: 'generation', createdAt: Date.now(), nodeId: node.id }])
     try { await generatePreview(node, assistantMode === 'agent' ? { mode: 'quick-edit', editInstruction: constrainedPrompt, preserveSourceDimensions: true } : {}) }
     finally { setAssistantGenerating(false) }
+  }
+  const submitCanvasGeneration = async (promptOverride = '', options = {}) => {
+    const prompt = (typeof promptOverride === 'string' && promptOverride.trim() ? promptOverride : assistantInput).trim()
+    if (!prompt || assistantGenerating) return
+    const targetProjectId = activeProjectRef.current
+    const textOnly = options.textOnly === true
+    const references = textOnly ? [] : assistantReferences
+    const userMessage = { id: uid(), role: 'user', text: prompt, createdAt: Date.now(), source: 'generation' }
+    const responseMessage = { id: uid(), role: 'assistant', text: '正在准备生成…', model: imageService.model || '当前生图模型', source: 'generation', createdAt: Date.now(), status: 'running' }
+    const saveProjectChat = (messages) => {
+      localStorage.setItem(chatKey(targetProjectId), JSON.stringify(messages.slice(-100)))
+      if (targetProjectId === activeProjectRef.current) setChatMessages(messages)
+    }
+    const initialMessages = [...chatMessages, userMessage, responseMessage]
+    saveProjectChat(initialMessages)
+    setGenerationHistoryOpen(false)
+    if (!imageService?.configured) {
+      saveProjectChat([...initialMessages.slice(0, -1), { ...responseMessage, role: 'error', text: '请先打开齿轮设置并完成图像服务配置。', status: 'failed' }])
+      return
+    }
+    setAssistantGenerating(true)
+    try {
+      const scene = sceneRef.current
+      const liveElements = (scene.elements || []).filter((element) => !element.isDeleted)
+      const sceneFiles = { ...(scene.files || {}) }
+      const nodeReferences = []
+      let sourceElement = null
+      for (const reference of references.slice(0, 8)) {
+        const candidateElement = reference.canvasElementId ? liveElements.find((element) => element.id === reference.canvasElementId) : null
+        if (candidateElement) {
+          sourceElement ||= candidateElement
+          const fileId = reference.fileId || candidateElement.fileId || reference.id
+          nodeReferences.push({ ...reference, dataURL: reference.dataURL, fileId, assetId: reference.assetId || sceneFiles[fileId]?.assetId || null, originalDataURL: undefined })
+          continue
+        }
+        const rawDataURL = reference.sourceFile ? await readImageFile(reference.sourceFile) : reference.originalDataURL || reference.dataURL
+        if (!rawDataURL?.startsWith('data:image/')) continue
+        const fileId = uid()
+        const asset = await storeProjectAsset({ id: fileId, dataURL: rawDataURL, name: reference.name || '生图参考图', mimeType: reference.mimeType || 'image/png', kind: 'image', tags: ['生图参考'], projectId: targetProjectId })
+        const file = { id: fileId, assetId: asset.assetId, ...(asset.assetId ? {} : { dataURL: rawDataURL }), mimeType: reference.mimeType || 'image/png', created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+        sceneFiles[fileId] = file
+        nodeReferences.push({ ...reference, id: fileId, fileId, assetId: asset.assetId || null, dataURL: asset.previewDataURL || reference.dataURL, sourceFile: undefined, originalDataURL: undefined, canvasElementId: undefined })
+      }
+      if (targetProjectId !== activeProjectRef.current) throw new Error('当前项目已切换，本次生成已取消，请回到原项目重新提交。')
+      const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
+      const boardWidth = boardRef.current?.clientWidth || 900
+      const boardHeight = boardRef.current?.clientHeight || 700
+      const center = { x: -(viewportRef.current.scrollX || 0) + boardWidth / (2 * zoom), y: -(viewportRef.current.scrollY || 0) + boardHeight / (2 * zoom) }
+      const generationNode = {
+        id: uid(), kind: 'prompt', sourceElementId: sourceElement?.id || null, parentNodeId: null,
+        x: sourceElement ? sourceElement.x + sourceElement.width + 160 : center.x - 310,
+        y: sourceElement ? sourceElement.y : center.y - 280,
+        width: 620, height: 560, model: imageService.model || '当前生图模型', templateId: 'canvas-chat',
+        templateLabel: '画布生图', prompt, instruction: '', output: '', busy: false, status: 'completed',
+        referenceImages: nodeReferences, referenceImage: null, referenceImageMode: nodeReferences.length ? 'scene' : null,
+        versionHistory: [], ...GENERATION_DEFAULTS, ...assistantGenerationSettings,
+        generationTextOnly: textOnly || nodeReferences.length === 0, productConsistency: false,
+      }
+      const nodes = [...(sceneRef.current.workflowNodes || []), generationNode]
+      sceneRef.current = { ...sceneRef.current, files: sceneFiles, workflowNodes: nodes }
+      setWorkflowNodes(nodes)
+      setSelected(null); setSelectedCanvasIds([])
+      api.current?.updateScene({ appState: { selectedElementIds: {} } })
+      focusGenerationContext(generationNode, sourceElement)
+      persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneFiles, nodes)
+      setAssistantInput('')
+      setAssistantReferences([])
+      const pendingMessage = { ...responseMessage, nodeId: generationNode.id, text: `已提交 ${generationNode.generationAspect} · ${generationNode.generationQuality} · ${generationNode.generationCount} 张，结果会作为新节点添加到画布。` }
+      const pendingMessages = [...initialMessages.slice(0, -1), pendingMessage]
+      saveProjectChat(pendingMessages)
+      await generatePreview(generationNode, { textOnly: generationNode.generationTextOnly })
+      const completedNode = (sceneRef.current.workflowNodes || []).find((node) => node.id === generationNode.id)
+      const completedCount = completedNode?.generationCompletedCount || 0
+      const failedCount = completedNode?.generationFailedCount || 0
+      const completionText = failedCount
+        ? `生成结束：成功 ${completedCount} 张，失败 ${failedCount} 张。${completedNode?.generationError || ''}`
+        : completedNode?.generationStatus || `生成完成：${completedCount} 张结果已添加到画布。`
+      saveProjectChat(pendingMessages.map((message) => message.id === pendingMessage.id ? { ...message, text: completionText, status: failedCount ? 'failed' : 'completed' } : message))
+    } catch (error) {
+      const errorMessageText = errorMessage(error, '生图提交失败，请检查设置后重试。')
+      saveProjectChat([...initialMessages.slice(0, -1), { ...responseMessage, role: 'error', text: errorMessageText, status: 'failed' }])
+    } finally {
+      setAssistantGenerating(false)
+    }
   }
   const modifyCompositionPrompt = async () => {
     if (!canComposeGeneration || compositionPromptBusy) return
@@ -1508,26 +2013,35 @@ function App() {
     if (!payload?.imageDataUrl?.startsWith('data:image/')) return
     const dataURL = payload.imageDataUrl
     const image = await new Promise((resolve, reject) => { const source = new Image(); source.onload = () => resolve(source); source.onerror = reject; source.src = dataURL })
-    const fileId = uid(), elementId = uid(), scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight))
+    const naturalWidth = image.naturalWidth, naturalHeight = image.naturalHeight
+    const fileId = uid(), elementId = uid(), scale = Math.min(1, 900 / Math.max(naturalWidth, naturalHeight))
+    image.src = ''
     const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
     const baseX = -(viewportRef.current.scrollX || 0) + 120 / zoom
     const baseY = -(viewportRef.current.scrollY || 0) + 130 / zoom
     const mimeType = dataURL.match(/^data:([^;]+)/)?.[1] || 'image/png'
-    const file = { id: fileId, dataURL, mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
-    const element = { id: elementId, type: 'image', x: baseX, y: baseY, width: Math.max(80, Math.round(image.naturalWidth * scale)), height: Math.max(80, Math.round(image.naturalHeight * scale)), angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: payload.sourceUrl || null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null }
+    const asset = await storeProjectAsset({ id: fileId, dataURL, name: `插件图片 ${new Date().toLocaleString()}`, mimeType, kind: 'image', tags: ['插件导入'], sourceUrl: payload.sourceUrl || null })
+    payload.imageDataUrl = ''
+    const file = { id: fileId, assetId: asset.assetId, ...(asset.assetId ? {} : { dataURL }), mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+    const element = { id: elementId, type: 'image', x: baseX, y: baseY, width: Math.max(80, Math.round(naturalWidth * scale)), height: Math.max(80, Math.round(naturalHeight * scale)), angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: payload.sourceUrl || null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null }
     const current = sceneRef.current
     const files = { ...current.files, [fileId]: file }
     const elements = [...current.elements, element]
     sceneRef.current = { ...current, elements, files }
-    const displayFile = await makeCanvasDisplayFile(file)
+    const displayFile = { ...file, dataURL: asset.previewDataURL || (await makeCanvasDisplayFile({ ...file, dataURL })).dataURL, mimeType: asset.previewDataURL ? 'image/webp' : mimeType }
     displayFilesRef.current[file.id] = displayFile
     api.current?.addFiles([displayFile])
     api.current?.updateScene({ elements, appState: { selectedElementIds: { [elementId]: true } } })
-    setSelected({ ...element, file })
+    setSelected({ ...element, file: displayFile })
     persist(elements, current.appState || emptyScene.appState, files)
     if (payload.schemaVersion === 2 && String(payload.sourceType || '').startsWith('blender_')) {
       const camera = payload.camera || {}, lighting = payload.lighting || {}, render = payload.render || {}
-      const auxiliary = Object.entries(payload.auxiliaryImages || {}).filter(([, value]) => String(value || '').startsWith('data:image/')).slice(0, 3).map(([role, value]) => ({ id: uid(), name: `${role}.png`, role: role === 'depth' ? '深度结构约束' : role === 'normal' ? '世界法线约束' : '物体遮罩约束', dataURL: value }))
+      const auxiliary = []
+      for (const [role, value] of Object.entries(payload.auxiliaryImages || {}).filter(([, value]) => String(value || '').startsWith('data:image/')).slice(0, 3)) {
+        const id = uid(), name = `${role}.png`, preview = await makeCanvasDisplayFile({ id, dataURL: value, name })
+        auxiliary.push({ id, name, role: role === 'depth' ? '深度结构约束' : role === 'normal' ? '世界法线约束' : '物体遮罩约束', dataURL: preview.dataURL, mimeType: preview.mimeType })
+        payload.auxiliaryImages[role] = ''
+      }
       const prompt = payload.prompt?.trim() || '基于当前 Blender 场景生成高质量画面，保持主体布局、空间关系和构图参考。'
       const node = { id: uid(), kind: 'blender', sourceElementId: element.id, parentNodeId: null, x: element.x + element.width + 150, y: element.y, width: 620, height: 650, model: 'Blender Bridge', templateId: '', templateLabel: payload.sourceType === 'blender_render' ? '正式渲染导入' : '摄像机视口导入', prompt, blenderBasePrompt: prompt, output: prompt, busy: false, status: 'completed', referenceImages: auxiliary, blenderMeta: { sceneName: payload.sceneName, blenderVersion: payload.blenderVersion, sourceType: payload.sourceType, camera, lighting, render }, lockCamera: false, lockLighting: false, lockProductOrientation: true, useStructurePasses: false, versionHistory: [], ...GENERATION_DEFAULTS, productConsistency: true }
       node.prompt = blenderPromptForNode(node); node.output = node.prompt
@@ -1536,7 +2050,7 @@ function App() {
       setWorkflowNodes(nodes)
       persist(elements, current.appState || emptyScene.appState, files, nodes)
       setSelectedNodeIds([node.id]); requestAnimationFrame(() => focusWorkflowNode(node))
-    } else if (payload.prompt?.trim()) addPromptNode(payload.prompt, payload.model || '插件当前模型', 'reverse', element, { id: payload.templateId || '', label: payload.templateLabel || '插件当前模板' })
+    } else if (payload.prompt?.trim()) addPromptNode(payload.prompt, payload.model || '插件当前模型', 'reverse', element, { id: payload.templateId || '', label: payload.templateLabel || '插件当前模板' }, null, { generationTextOnly: true })
   }
   useEffect(() => {
     if (!window.__TAURI__) return undefined
@@ -1677,7 +2191,19 @@ function App() {
   const focusWorkflowNode = (node) => {
     const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
     const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
-    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - node.width / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
+    const nodeWidth = workflowNodeDimensions(node).width
+    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - nodeWidth / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
+    setSelectedNodeIds([node.id])
+  }
+  const focusGenerationContext = (node, sourceElement) => {
+    const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
+    const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
+    const { width: nodeWidth, height: nodeHeight } = workflowNodeDimensions(node)
+    const left = sourceElement ? Math.min(sourceElement.x, node.x) : node.x
+    const right = sourceElement ? Math.max(sourceElement.x + sourceElement.width, node.x + nodeWidth) : node.x + nodeWidth
+    const top = sourceElement ? Math.min(sourceElement.y, node.y) : node.y
+    const bottom = sourceElement ? Math.max(sourceElement.y + sourceElement.height, node.y + nodeHeight) : node.y + nodeHeight
+    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - (left + right) / 2, scrollY: height / (2 * zoom) - (top + bottom) / 2 } })
     setSelectedNodeIds([node.id])
   }
   const focusGenerationResult = (message) => {
@@ -1686,7 +2212,7 @@ function App() {
     const generatedId = [...(node.generatedElementIds || [])].reverse().find((id) => sceneRef.current.elements.some((element) => element.id === id && !element.isDeleted))
     const element = generatedId ? sceneRef.current.elements.find((item) => item.id === generatedId) : sceneRef.current.elements.find((item) => item.id === node.sourceElementId)
     if (!element) return focusWorkflowNode(node)
-    const file = sceneRef.current.files[element.fileId]
+    const file = canvasFileFor(element.fileId)
     api.current?.updateScene({ appState: { selectedElementIds: { [element.id]: true } } })
     api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
     setSelected({ ...element, file }); setSelectedCanvasIds([element.id]); setSelectedNodeIds([node.id])
@@ -1706,7 +2232,7 @@ function App() {
   }, [mode, selectedNodeIds])
   const sourceFileForNode = (node) => {
     const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId)
-    return source?.fileId ? sceneRef.current.files[source.fileId] : null
+    return source?.fileId ? canvasFileFor(source.fileId) : null
   }
   const attachNodeImage = async (id, fileList) => {
     const files = [...(fileList || [])].filter((file) => file?.type?.startsWith('image/'))
@@ -1714,7 +2240,12 @@ function App() {
     const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === id)
     const existing = node?.referenceImages || (node?.referenceImage ? [{ ...node.referenceImage, id: uid(), role: '补充参考' }] : [])
     const remaining = Math.max(0, 8 - existing.length)
-    const additions = await Promise.all(files.slice(0, remaining).map(async (file) => ({ id: uid(), dataURL: await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error(`无法读取参考图：${file.name}`)); reader.readAsDataURL(file) }), name: file.name, mimeType: file.type, role: '补充参考' })))
+    const additions = []
+    for (const file of files.slice(0, remaining)) {
+      const rawDataURL = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error(`无法读取参考图：${file.name}`)); reader.readAsDataURL(file) })
+      const id = uid(), preview = await makeCanvasDisplayFile({ id, dataURL: rawDataURL, name: file.name, mimeType: file.type || 'image/png' })
+      additions.push({ id, dataURL: preview.dataURL, name: file.name, mimeType: preview.mimeType || file.type || 'image/png', role: '补充参考' })
+    }
     updateWorkflowNode(id, { referenceImages: [...existing, ...additions], referenceImage: null, error: '', generationError: '' })
   }
   const removeNodeImage = (id, imageId) => {
@@ -1732,7 +2263,8 @@ function App() {
       const roles = references.map((image, index) => `参考图${index + 1}用途：${image.role || '补充参考'}`).join('；')
       const instruction = modification ? [node.instruction, roles].filter(Boolean).join('\n') : null
       const result = await invoke('reverse_image_prompt', { imageDataUrl: await composeVisionReferences(file, references), templateId: node.templateId || null, originalPrompt: modification ? node.prompt : null, instruction })
-      updateWorkflowNode(node.id, modification ? { busy: false, status: 'completed', error: '', output: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel } : { busy: false, status: 'completed', error: '', prompt: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel })
+      updateWorkflowNode(node.id, modification ? { busy: false, status: 'completed', error: '', output: result.prompt, outputInstruction: node.instruction || '', outputTemplateId: result.templateId || node.templateId || '', outputSourcePrompt: node.prompt || '', model: result.model, templateId: result.templateId, templateLabel: result.templateLabel } : { busy: false, status: 'completed', error: '', prompt: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel, generationTextOnly: true })
+      return result.prompt || ''
     } catch (error) { updateWorkflowNode(node.id, { busy: false, status: 'failed', error: errorMessage(error, '图片处理失败，请删除后重新上传参考图') }) }
   }
   const runReversePrompt = async () => {
@@ -1743,18 +2275,28 @@ function App() {
       const result = await invoke('reverse_image_prompt', { imageDataUrl: compressed, templateId: selectedTemplateId || null })
       setReversePrompt(result.prompt || '')
       setAiStatus((previous) => ({ ...previous, model: result.model, configured: true }))
-      const nodeId = addPromptNode(result.prompt || '', result.model || aiStatus?.model || '当前模型', 'reverse', selected, { id: result.templateId, label: result.templateLabel })
+      const nodeId = addPromptNode(result.prompt || '', result.model || aiStatus?.model || '当前模型', 'reverse', selected, { id: result.templateId, label: result.templateLabel }, null, { generationTextOnly: true })
       if (nodeId) setSelectedNodeIds([nodeId])
+      if (result.prompt) {
+        saveChat([...chatMessages, { id: uid(), role: 'assistant', text: result.prompt, model: result.model || aiStatus?.model || '当前模型', isPrompt: true, source: 'reverse', linkedToNode: Boolean(nodeId), templateId: result.templateId, templateLabel: result.templateLabel, createdAt: Date.now(), nodeId: nodeId || null }])
+        setGenerationHistoryOpen(true)
+      }
+      setSelectedImageMoreOpen(false)
     } catch (error) {
-      setReverseError(typeof error === 'string' ? error : String(error))
+      const message = errorMessage(error, '图片反推失败，请检查服务设置后重试。')
+      setReverseError(message)
+      saveChat([...chatMessages, { id: uid(), role: 'error', text: message, source: 'reverse', createdAt: Date.now() }])
+      setGenerationHistoryOpen(true)
     } finally { setReverseBusy(false) }
   }
   const saveReversePrompt = async () => {
     if (!selectedFile || !reversePrompt.trim()) return
-    const type = selectedFile.mimeType || selectedFile.dataURL.match(/^data:(image\/[^;]+)/)?.[1] || 'image/png'
-    const extension = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
     try {
-      const result = await invoke('create_card_manual', { imageBase64: selectedFile.dataURL, imageExt: extension, prompt: reversePrompt.trim(), negativePrompt: '', category: '灵感空间', tags: '[]' })
+      const original = await readOriginalFile(selectedFile)
+      if (!original?.dataURL) throw new Error('找不到图片原图数据。')
+      const type = original.mimeType || original.dataURL.match(/^data:(image\/[^;]+)/)?.[1] || 'image/png'
+      const extension = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+      const result = await invoke('create_card_manual', { imageBase64: original.dataURL, imageExt: extension, prompt: reversePrompt.trim(), negativePrompt: '', category: '灵感空间', tags: '[]' })
       if (!result.ok) throw new Error(result.reason || '保存失败')
       alert('已保存到提示词库，并保留原图关联。')
     } catch (error) { alert(`保存失败：${String(error)}`) }
@@ -1926,11 +2468,6 @@ function App() {
       alert(`准备多角度生成失败：${errorMessage(error, '请重试')}`)
     }
   }
-  const runAssistantGeneration = async () => {
-    const node = ensureAssistantGenerationNode()
-    if (!node) { alert('请先选中一张已有生图，或选择一个提示词节点。'); return }
-    await generateAssistantPreview(node, null, { mode: 'normal' })
-  }
   const selectedImageGeneration = selected?.customData?.generation || {}
   const assistantGenerationValue = assistantGenerationNode || {
     ...GENERATION_DEFAULTS,
@@ -1961,7 +2498,7 @@ function App() {
       alert(`训练 Skill「${saved.name}」已保存。以后执行时会参考本项目的示范流程。`)
     } catch (error) { alert(`保存训练 Skill 失败：${errorMessage(error)}`) }
   }
-  const importSkills = async (data) => { const result = await invoke('import_skills', { data }); await refreshSkills(); alert(`已导入 ${result.count} 个 Skill`) }
+  const importSkills = async (data) => { const result = await invoke('import_skills', { data }); await refreshSkills(); return result }
   const exportSkills = async (ids = []) => { const result = await invoke('export_skills', { ids }); alert(`Skill 已导出到：\n${result.path}`) }
   const deleteSkill = async (id) => { if (!window.confirm('确定删除这个自建 Skill？')) return; await invoke('delete_skill', { id }); await refreshSkills() }
   const runSkill = async (skill) => {
@@ -2023,7 +2560,7 @@ function App() {
         }
         let generationNode = selectedWorkflowNode
         const editSourceFile = selectedFile?.dataURL ? selectedFile : selectedWorkflowNode ? sourceFileForNode(selectedWorkflowNode) : null
-        const selectedEditImage = editSourceFile?.dataURL ? { id: selected?.id || uid(), dataURL: editSourceFile.dataURL, name: 'Agent 原图编辑底稿', mimeType: editSourceFile.mimeType || 'image/png', role: '原图底稿，只允许修改明确点名内容' } : null
+        const selectedEditImage = editSourceFile?.dataURL ? { id: editSourceFile.id || selected?.fileId || uid(), assetId: editSourceFile.assetId, dataURL: editSourceFile.dataURL, name: 'Agent 原图编辑底稿', mimeType: editSourceFile.mimeType || 'image/png', role: '原图底稿，只允许修改明确点名内容' } : null
         if (generationNode) {
           const prompt = selectedEditImage ? `${AGENT_CONSTRAINED_EDIT_INSTRUCTION}\n\n${finalPrompt}` : finalPrompt
           updateWorkflowNode(generationNode.id, { prompt, output: generationNode.kind === 'modify' || generationNode.kind === 'skill' ? prompt : generationNode.output, generationEditImage: selectedEditImage, productConsistency: !!selectedEditImage || generationNode.productConsistency, ...settings })
@@ -2074,7 +2611,7 @@ function App() {
         if (selectedWorkflowNode) {
           const key = selectedWorkflowNode.kind === 'modify' || selectedWorkflowNode.kind === 'skill' ? 'output' : 'prompt'
           updateWorkflowNode(selectedWorkflowNode.id, { [key]: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel })
-        } else if (selected?.type === 'image') nodeId = addPromptNode(result.prompt, result.model, 'reverse', selected, { id: result.templateId, label: result.templateLabel })
+        } else if (selected?.type === 'image') nodeId = addPromptNode(result.prompt, result.model, 'reverse', selected, { id: result.templateId, label: result.templateLabel }, null, { generationTextOnly: true })
         saveChat([...pending, { id: uid(), role: 'assistant', text: result.prompt, model: result.model, isPrompt: true, source: 'reverse', linkedToNode: Boolean(nodeId), templateId: result.templateId, templateLabel: result.templateLabel, createdAt: Date.now(), nodeId }])
       } else {
         const agentTranscript = assistantMode === 'agent' ? [...chatMessages.slice(-12), user].map((item) => `${item.role === 'user' ? '用户' : 'Mimo'}：${item.text}`).join('\n') : message
@@ -2133,21 +2670,23 @@ function App() {
   const addGeneratedImage = async (dataURL, node, taskMeta = {}) => {
     if (typeof dataURL !== 'string' || !dataURL.startsWith('data:image/')) throw new Error('图像服务返回的不是有效图片数据')
     const image = await new Promise((resolve, reject) => { const value = new Image(); value.onload = () => resolve(value); value.onerror = () => reject(new Error('生成图片解码失败，返回的文件可能不是有效图片')); value.src = dataURL })
-    const fileId = uid(), elementId = uid(), scale = Math.min(1, 800 / Math.max(image.naturalWidth, image.naturalHeight)), source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId)
+    const naturalWidth = image.naturalWidth, naturalHeight = image.naturalHeight
+    image.src = ''
+    const fileId = uid(), elementId = uid(), scale = Math.min(1, 800 / Math.max(naturalWidth, naturalHeight)), source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId)
     const mimeType = dataURL.match(/^data:([^;]+)/)?.[1] || 'image/png'
     const asset = await storeProjectAsset({ id: fileId, dataURL, name: `生成图 ${new Date().toLocaleString()}`, mimeType, kind: 'generated', tags: ['生图', taskMeta.aspect, taskMeta.quality].filter(Boolean), sourceUrl: taskMeta.sourceUrl || null })
-    const file = { id: fileId, assetId: asset.assetId, dataURL, mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
-    const width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale), resultIndex = Number(taskMeta.resultIndex || 0)
-    const element = { id: elementId, type: 'image', x: node.x + node.width + 140 + (resultIndex % 2) * (width + 40), y: node.y + Math.floor(resultIndex / 2) * (height + 40), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null, customData: { promptNodeId: node.id, prompt: node.kind === 'modify' ? (node.output || node.prompt) : node.prompt, generation: taskMeta } }
+    const file = { id: fileId, assetId: asset.assetId, ...(asset.assetId ? {} : { dataURL }), mimeType, created: Date.now(), lastRetrieved: Date.now(), version: 1 }
+    const width = Math.round(naturalWidth * scale), height = Math.round(naturalHeight * scale), resultIndex = Number(taskMeta.resultIndex || 0), nodeWidth = workflowNodeDimensions(node).width
+    const element = { id: elementId, type: 'image', x: node.x + nodeWidth + 140 + (resultIndex % 2) * (width + 40), y: node.y + Math.floor(resultIndex / 2) * (height + 40), width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, fileId, status: 'saved', scale: [1, 1], crop: null, customData: { promptNodeId: node.id, prompt: node.kind === 'modify' ? (node.output || node.prompt) : node.prompt, generation: taskMeta } }
     const files = { ...sceneRef.current.files, [fileId]: file }, elements = [...sceneRef.current.elements, element]
-    const displayFile = await makeCanvasDisplayFile(file)
+    const displayFile = { ...file, dataURL: asset.previewDataURL || (await makeCanvasDisplayFile({ ...file, dataURL })).dataURL, mimeType: asset.previewDataURL ? 'image/webp' : mimeType }
     displayFilesRef.current[file.id] = displayFile
     sceneRef.current = { ...sceneRef.current, files, elements }; api.current?.addFiles([displayFile]); api.current?.updateScene({ elements }); persist(elements, sceneRef.current.appState || emptyScene.appState, files)
     const currentNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node
     updateWorkflowNode(node.id, { generatedElementIds: [...(currentNode.generatedElementIds || []), elementId], generationModel: taskMeta.model || imageService.model })
     api.current?.updateScene({ appState: { selectedElementIds: { [elementId]: true } } })
     api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
-    setSelected({ ...element, file }); setSelectedCanvasIds([elementId]); setSelectedNodeIds([node.id])
+    setSelected({ ...element, file: displayFile }); setSelectedCanvasIds([elementId]); setSelectedNodeIds([node.id])
   }
   const cancelGeneration = async (node) => {
     const current = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)
@@ -2162,22 +2701,26 @@ function App() {
     if (!node) return
     const multiAngleRun = options.mode === 'multi-angle'
     const quickEditRun = options.mode === 'quick-edit'
+    const textOnlyRun = !multiAngleRun && !quickEditRun && (options.textOnly ?? textOnlyDefaultForNode(node))
     const localEditInstruction = options.editInstruction?.trim() || ''
     // 视角变体时，当前选中的已生成场景图是“编辑底图”，不是产品参考图。
     // 只有白底/产品参考图进入 referenceImages，避免模型把整张旧场景锁死。
-    const selectedCanvasImage = selectedFile?.dataURL ? {
+    const selectedCanvasImage = !textOnlyRun && selectedFile?.dataURL ? {
       id: selected?.fileId || selectedFile.id || uid(),
+      assetId: selectedFile.assetId,
       dataURL: selectedFile.dataURL,
       name: '当前选中场景底图',
       mimeType: selectedFile.mimeType || 'image/png',
       role: '仅用于保持场景、光线和构图的编辑底图',
     } : null
-    const existingReferences = (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
+    const existingReferences = textOnlyRun ? [] : (node.referenceImages?.length ? node.referenceImages : (node.referenceImage ? [node.referenceImage] : [])).filter((image) => image?.dataURL)
     const selectedGeneratedScene = Boolean(selectedImageNode && selectedCanvasImage)
     // 多角度是对画布上当前图片做视角变体。无论图片是刚拖入的原图，还是已经
     // 生成过的场景图，都要作为编辑底图发送；不能把纯图片误当成产品参考图。
     const selectedImageAsEdit = Boolean(selectedCanvasImage && (quickEditRun || multiAngleRun))
-    const referenceImages = selectedImageAsEdit
+    const referenceImages = textOnlyRun
+      ? []
+      : selectedImageAsEdit
       ? existingReferences
       : selectedGeneratedScene
         ? existingReferences
@@ -2189,38 +2732,42 @@ function App() {
       ...(promptOverride && !localEditInstruction ? { prompt: promptOverride, output: promptOverride } : {}),
       referenceImages,
       referenceImage: null,
+      generationTextOnly: textOnlyRun,
       generationEditImage: selectedImageAsEdit ? selectedCanvasImage : null,
       generationEditMaskBoxes: options.editMaskBoxes || node.generationEditMaskBoxes || null,
-      productConsistency: selectedImageAsEdit ? (existingReferences.length ? true : node.productConsistency) : (selectedCanvasImage ? true : node.productConsistency),
+      productConsistency: textOnlyRun ? false : selectedImageAsEdit ? (existingReferences.length ? true : node.productConsistency) : (selectedCanvasImage ? true : node.productConsistency),
     }
     // 节点本身仍保存产品参考图；已生成场景底图只存在于本次请求中。
     if (selectedCanvasImage && !selectedImageAsEdit) updateWorkflowNode(node.id, { referenceImages, referenceImage: null, productConsistency: true })
-    await generatePreview(previewNode, { mode: multiAngleRun ? 'multi-angle' : quickEditRun ? 'quick-edit' : 'normal', editInstruction: localEditInstruction, editMaskBoxes: options.editMaskBoxes || null, preserveSourceDimensions: options.preserveSourceDimensions === true })
+    if (options.textOnly != null && node.generationTextOnly !== options.textOnly) updateWorkflowNode(node.id, { generationTextOnly: options.textOnly })
+    await generatePreview(previewNode, { mode: multiAngleRun ? 'multi-angle' : quickEditRun ? 'quick-edit' : 'normal', textOnly: textOnlyRun, editInstruction: localEditInstruction, editMaskBoxes: options.editMaskBoxes || null, preserveSourceDimensions: options.preserveSourceDimensions === true })
   }
-  const generateAssistantMessagePreview = async (message) => {
-    let node = selectedWorkflowNode
+  const generateAssistantMessagePreview = async (message, options = {}) => {
+    let node = (message.nodeId && workflowNodes.find((item) => item.id === message.nodeId)) || selectedWorkflowNode
     if (!node) {
       if (!selectedFile || selected?.type !== 'image') return alert('请先选中要作为产品参考的图片。')
-      const nodeId = addPromptNode(message.text, message.model || aiStatus?.model || '当前模型', 'reverse', selected, null)
+      const nodeOptions = message.source === 'reverse' ? { generationTextOnly: true } : {}
+      const nodeId = addPromptNode(message.text, message.model || aiStatus?.model || '当前模型', 'reverse', selected, null, null, nodeOptions)
       node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
       if (!node) return
       setSelectedNodeIds([node.id])
     }
-    await generateAssistantPreview(node, message.text, { mode: 'normal' })
+    await generateAssistantPreview(node, message.text, { mode: 'normal', ...options })
   }
   const generatePreview = async (node, options = {}) => {
     if ((sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)?.generationBusy) return
     const multiAngleRun = options.mode === 'multi-angle'
     const quickEditRun = options.mode === 'quick-edit'
+    const textOnlyRun = !multiAngleRun && !quickEditRun && (options.textOnly ?? textOnlyDefaultForNode(node))
     const editInstruction = options.editInstruction?.trim() || ''
     const preserveSourceDimensions = options.preserveSourceDimensions === true
     // 多角度状态保存在节点上，便于下次打开时继续编辑；但普通“生成预览”
     // 必须使用原提示词，不能把上一次的角度指令、背面图或场景底图带进去。
     const generationNode = (multiAngleRun || quickEditRun)
       ? node
-      : { ...node, generationMultiAngleEnabled: false, generationBacksideReference: null, generationEditImage: null, generationEditMaskBoxes: null }
+      : { ...node, ...(textOnlyRun ? { referenceImages: [], referenceImage: null, productConsistency: false } : {}), generationMultiAngleEnabled: false, generationBacksideReference: null, generationEditImage: null, generationEditMaskBoxes: null }
     const basePrompt = generationNode.kind === 'modify' ? (generationNode.output || generationNode.prompt) : generationNode.prompt; if (!basePrompt?.trim()) return
-    const keepProduct = generationNode.kind === 'blender' || generationNode.productConsistency !== false
+    const keepProduct = !textOnlyRun && (generationNode.kind === 'blender' || generationNode.productConsistency !== false)
     const multiAngleInstruction = multiAngleRun ? buildMultiAngleInstruction(generationNode) : ''
       const prompt = [keepProduct ? PRODUCT_CONSISTENCY_INSTRUCTION : '', basePrompt, editInstruction, multiAngleInstruction].filter(Boolean).join('\n\n')
       const quality = generationNode.generationQuality || GENERATION_DEFAULTS.generationQuality, aspect = generationNode.generationAspect || GENERATION_DEFAULTS.generationAspect
@@ -2237,35 +2784,48 @@ function App() {
       // A reference explicitly attached to a node is always a product reference,
       // including ordinary prompt nodes started from the assistant.  Previously
       // prompt nodes silently discarded it and fell back to their source scene.
-      const replacementReferences = (generationNode.referenceImages?.length ? generationNode.referenceImages : (generationNode.referenceImage ? [generationNode.referenceImage] : [])).filter((image) => image?.dataURL)
+      const replacementReferences = textOnlyRun ? [] : (generationNode.referenceImages?.length ? generationNode.referenceImages : (generationNode.referenceImage ? [generationNode.referenceImage] : [])).filter((image) => image?.dataURL)
       const backsideReference = multiAngleRun && generationNode.generationBacksideReference?.dataURL ? generationNode.generationBacksideReference : null
       const requestProductReferences = replacementReferences.slice(0, backsideReference ? 7 : 8)
       const replacementReference = replacementReferences[0] || null
-      const sourceImage = sourceFileForNode(generationNode)
-      const explicitEditImage = (multiAngleRun || quickEditRun) && generationNode.generationEditImage?.dataURL ? generationNode.generationEditImage : null
-      const editImage = explicitEditImage || (generationNode.kind === 'blender' ? sourceImage : replacementReference || (keepProduct ? sourceImage : null))
+      const sourceImage = keepProduct ? sourceFileForNode(generationNode) : null
+      const explicitEditImageSource = (multiAngleRun || quickEditRun) && generationNode.generationEditImage?.dataURL ? generationNode.generationEditImage : null
+      const explicitEditImage = explicitEditImageSource ? await readOriginalFile(explicitEditImageSource) : null
+      const editImageCandidate = explicitEditImage || (generationNode.kind === 'blender' ? sourceImage : replacementReference || (keepProduct ? sourceImage : null))
+      const editImage = !explicitEditImage && (editImageCandidate?.assetId || editImageCandidate?.fileId)
+        ? await readOriginalFile(editImageCandidate.fileId || editImageCandidate.id)
+        : editImageCandidate
       if (generationNode.kind === 'modify' && !replacementReference && !quickEditRun) throw new Error('请添加产品参考图；生成不会使用原场景图')
-      const referenceRoles = requestProductReferences.map((item, index) => `${generationNode.kind === 'blender' ? '结构参考图' : '产品参考图'}${index + 1}用途：${item.role || '产品外观'}`).join('；')
+      const visualReferenceMode = generationNode.referenceImageMode === 'scene'
+      const referenceRoles = requestProductReferences.map((item, index) => `${generationNode.kind === 'blender' ? '结构参考图' : visualReferenceMode ? '画面参考图' : '产品参考图'}${index + 1}用途：${item.role || (visualReferenceMode ? '场景与构图' : '产品外观')}`).join('；')
       const backsideReferenceRole = backsideReference ? '【背面参考图已上传】本次请求的最后一张参考图就是当前产品的背面/另一面。请把它视为同一型号的结构事实，用来补全目标视角中可见的背面，不得把它当成另一款产品或场景风格参考。' : ''
       const editRole = explicitEditImage
         ? multiAngleRun
           ? '当前选中的第一张输入图是同一场景的编辑底图，用于识别人物、产品、背景、光线和真实空间关系；它不是要锁死的原构图。摄像机模式下必须对整张场景重新构图，让人物、产品和背景一起随目标机位改变；若开启人物动作锁定，人物只允许改变投影、可见侧面和遮挡，不得重新摆姿势或把原人物贴回原背景位置。'
           : '当前选中的第一张输入图是本次快速编辑的原图底稿。只执行用户明确提出的编辑，不要重新设计未提及的主体、人物动作、产品结构、场景、构图、光线和画面比例；不要把原图当成新的产品型号参考。'
         : ''
-      const finalAnglePriority = multiAngleRun ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(generationNode.generationRotate)}；目标垂直机位：${describeCameraTilt(generationNode.generationTilt)}；${describeCameraScale(generationNode.generationScale)}${describeAngleEvidence(generationNode)}如果原图是中远景而目标是近景，输出必须明显收紧取景，让产品成为画面主体。` : ''
+      const finalAnglePriority = multiAngleRun ? `【最终镜头执行指令】必须优先执行目标镜头，不得复用原图的取景距离和构图。目标水平视角：${describeCameraRotation(generationNode.generationRotate)}；目标垂直机位：${describeCameraTilt(generationNode.generationTilt)}；${describeCameraScale(generationNode.generationScale)}${describeAngleEvidence(generationNode)}如果原图是中远景而目标是近景，必须收紧整组场景的取景，让人物与产品整体更充分地进入画面；产品可以成为视觉重点，但不得单独放大，且必须保持与人物合理的真实尺寸关系。` : ''
       const quickEditPriority = quickEditRun ? '【快速编辑最高优先级：原图局部编辑】这是在当前图片上做局部修改，不是重新生成一张新图。上面的局部编辑指令是唯一需要改变的内容，不需要再次改写或扩展成完整场景提示词；只允许改变用户明确点名的区域或对象。未提及的主体身份、人物动作、产品结构、背景、天空以外的环境、构图、镜头、光线方向、文字和画面比例全部锁定，必须与原图保持一致。若用户只修改天空，就只编辑天空及其自然反射，严禁重做人物、产品、地面和背景；禁止额外发挥、换场景、改动作或改变取景。' : ''
       const blenderOrientationPriority = generationNode.kind === 'blender' && generationNode.lockProductOrientation !== false ? '【Blender 产品朝向最高优先级】输入的 Blender RGB 渲染图是产品姿态的唯一依据。必须保持车头、车尾、前轮、后轮在画面中的左右关系和当前可见侧面；严禁水平翻转、镜像、掉头、交换前后轮位置或生成相反侧视角。即使场景参考或构图描述与此冲突，也必须以 Blender 原图的产品朝向为准。' : ''
       const generationPrompt = [
         prompt,
         blenderOrientationPriority,
         editRole,
-        referenceRoles ? generationNode.kind === 'blender' ? `【Blender 结构参考】${referenceRoles}。这些辅助图只约束深度、表面方向和物体边界，不得把灰度或法线颜色当成画面颜色。` : `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
+        referenceRoles ? generationNode.kind === 'blender' ? `【Blender 结构参考】${referenceRoles}。这些辅助图只约束深度、表面方向和物体边界，不得把灰度或法线颜色当成画面颜色。` : visualReferenceMode ? `【画面参考图】${referenceRoles}。把参考图用于理解场景、构图、色彩和氛围，按用户文字要求创作允许变化的画面，不要把参考图误读成产品白底图，也不要强制逐像素复刻。` : `【产品参考图锁定】${referenceRoles}。这些图片才是本次生成的产品外观事实来源；当文字描述与产品参考图存在冲突时，以产品参考图为准。必须复刻其中产品的车架、车把、立管、踏板、前后轮、轮毂、灯具、折叠结构、配色、材质、贴花与比例，不得替换成通用款或重新设计产品。` : '',
         backsideReferenceRole,
         multiAngleRun && explicitEditImage ? `【视角变体最终覆盖指令】必须实际改变摄像机位置，并让人物、产品、背景透视和遮挡关系同步改变；不能只复用原图构图，也不能只翻转产品。原提示词中关于旧视角、旧机位、旧景别和旧构图的描述仅作为场景事实，不得覆盖当前目标角度。${generationNode.generationActionLock !== false ? '人物当前动作是锁定项，只能重新投影，不能改动作。' : ''}` : '',
         finalAnglePriority,
         quickEditPriority,
       ].filter(Boolean).join('\n\n')
-      const productReferenceImages = requestProductReferences.length ? await prepareGenerationReferences(requestProductReferences) : []
+      const productReferenceImages = []
+      if (requestProductReferences.length) {
+        const perImageBudget = Math.max(240 * 1024, Math.min(700 * 1024, Math.floor((2.2 * 1024 * 1024) / requestProductReferences.length)))
+        for (const reference of requestProductReferences) {
+          const source = reference.fileId || reference.assetId ? await readOriginalFile(reference.fileId || reference.id) : reference
+          if (!source?.dataURL) throw new Error(`产品参考图“${reference.name || reference.role || ''}”无法读取`)
+          productReferenceImages.push(await prepareGenerationReference(source.dataURL, perImageBudget))
+        }
+      }
       const backsideReferenceDataUrl = backsideReference ? await prepareGenerationReference(backsideReference.dataURL, 700 * 1024) : null
       const editImageDataUrl = editImage ? await prepareGenerationReference(editImage.dataURL, 700 * 1024) : null
       const editMaskBoxes = quickEditRun ? (options.editMaskBoxes || generationNode.generationEditMaskBoxes || []).filter(Boolean) : []
@@ -2285,6 +2845,7 @@ function App() {
       const preparationMs = Date.now() - startedAt
       if (replacementReference) updateActive({ generationStatus: `正在锁定${node.kind === 'compose' ? `${replacementReferences.length} 张产品参考图` : `产品参考图“${replacementReference.name || replacementReference.role || '当前选中产品'}”`}生成` })
       else if (explicitEditImage) updateActive({ generationStatus: quickEditRun ? '正在以当前图片为编辑底图，准备生成快速编辑结果…' : '正在以当前生成场景为编辑底图，准备生成目标视角…' })
+      else if (textOnlyRun) updateActive({ generationStatus: '纯提示词生成中 · 未发送画布原图' })
       let submittedCount = 0, completedCount = 0, failedCount = 0, nextIndex = 0
       const failureDetails = []
       const taskIds = new Set(), taskTimings = []
@@ -2356,12 +2917,14 @@ function App() {
     const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === selected.customData.promptNodeId)
     const prompt = node ? (node.kind === 'modify' ? (node.output || node.prompt) : node.prompt) : selected.customData.prompt
     if (!prompt?.trim()) return alert('未找到这张生成图片对应的提示词。')
-    const type = selectedFile.mimeType || selectedFile.dataURL.match(/^data:(image\/[^;]+)/)?.[1] || 'image/png'
-    const extension = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
     const generation = selected.customData.generation || {}
     const tags = JSON.stringify(['生图验证', generation.aspect, generation.quality, generation.model].filter(Boolean))
     try {
-      const result = await invoke('create_card_manual', { imageBase64: selectedFile.dataURL, imageExt: extension, prompt: prompt.trim(), negativePrompt: '', category: '生图验证', tags })
+      const original = await readOriginalFile(selectedFile)
+      if (!original?.dataURL) throw new Error('找不到图片原图数据。')
+      const type = original.mimeType || original.dataURL.match(/^data:(image\/[^;]+)/)?.[1] || 'image/png'
+      const extension = type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+      const result = await invoke('create_card_manual', { imageBase64: original.dataURL, imageExt: extension, prompt: prompt.trim(), negativePrompt: '', category: '生图验证', tags })
       if (!result.ok) throw new Error(result.reason || '保存失败')
       alert('已将生成图片和对应提示词收藏到提示词库。')
     } catch (error) { alert(`收藏失败：${String(error)}`) }
@@ -2371,14 +2934,24 @@ function App() {
     try {
       // 生成完成时已经把服务端返回的完整图片保存到了本地文件仓库。
       // sourceUrl 可能是短期有效或已被服务端清理的对象存储地址，不能作为原图下载的首选来源。
-      const source = selectedFile.dataURL || selected.customData?.generation?.sourceUrl
+      let original = null
+      try { original = await readOriginalFile(selectedFile) } catch (error) { console.warn('无法从项目素材读取生成原图', error) }
+      const source = original?.dataURL || selected.customData?.generation?.sourceUrl
       if (!source) throw new Error('没有可下载的原图数据')
       const result = await invoke('save_generation_original', { source })
       alert(`原图已下载到：${result.path}`)
     } catch (error) { alert(`原图下载失败：${errorMessage(error)}`) }
   }
-  const selectedImageToolbarPosition = selected?.type === 'image' ? { left: Math.max(12, (selected.x + (viewport.scrollX || 0)) * (viewport.zoom || 1)), top: Math.max(54, (selected.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48) } : null
+  const selectedImageToolbarPosition = selected?.type === 'image' ? { left: Math.max(12, Math.min((selected.x + (viewport.scrollX || 0)) * (viewport.zoom || 1), Math.max(12, (boardRef.current?.clientWidth || 720) - 486))), top: Math.max(54, (selected.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48) } : null
   const quickEditPosition = selectedImageToolbarPosition ? { left: Math.max(12, Math.min(selectedImageToolbarPosition.left, Math.max(12, (boardRef.current?.clientWidth || 720) - 560))), top: selectedImageToolbarPosition.top + 54 } : null
+  const selectedPromptElements = selectedCanvasElements.filter((element) => element.type === 'text' && (element.text || '').trim())
+  const selectedPromptBounds = selectedPromptElements.reduce((bounds, element) => ({
+    x: Math.min(bounds.x, element.x), y: Math.min(bounds.y, element.y),
+  }), { x: Infinity, y: Infinity })
+  const selectedPromptToolbarPosition = selectedCanvasPrompt && selectedPromptElements.length ? {
+    left: Math.max(12, Math.min((selectedPromptBounds.x + (viewport.scrollX || 0)) * (viewport.zoom || 1), Math.max(12, (boardRef.current?.clientWidth || 720) - 310))),
+    top: Math.max(54, (selectedPromptBounds.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48 + (selectedImageToolbarPosition ? 52 : 0)),
+  } : null
   const openPromptVault = () => {
     // 切换立即发生；大场景保存移到浏览器空闲时段，避免阻塞按钮反馈。
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, sceneRef.current.workflowNodes || [])
@@ -2428,28 +3001,69 @@ function App() {
   }
 
   return <div className={`app ${canvasTheme === 'light' ? 'light-theme' : ''}`}>
-    <header className="bar"><b>阿男帮你推</b><nav className="mode-switch"><button className={mode === 'canvas' ? 'active' : ''} onClick={() => setMode('canvas')}>灵感空间</button><button className={mode === 'prompts' ? 'active' : ''} onClick={openPromptVault}>提示词库</button></nav>{mode === 'canvas' && <><span /><button className={appUpdate ? 'app-update-ready' : ''} disabled={updateChecking} onClick={appUpdate ? () => setUpdateDialogOpen(true) : checkAppUpdate}>{updateChecking ? '检查中…' : appUpdate ? `可更新 ${appUpdate.version}` : '检查更新'}</button><button onClick={() => setDetailOpen((value) => !value)}>{detailOpen ? '收起侧栏' : '展开侧栏'}</button><button onClick={() => input.current?.click()}>导入图片</button><input ref={input} hidden type="file" multiple accept="image/*" onChange={(event) => importFiles(event.target.files)} /></>}</header>
-    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 1.3.6{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
+    <header className="bar">
+      <span className="brand-logo" title="阿男帮你推" data-tauri-drag-region><img src="/canvas-logo.svg" alt="" /></span>
+      <nav className="mode-switch"><button className={mode === 'canvas' ? 'active' : ''} onClick={() => setMode('canvas')}>灵感画布</button><button className={mode === 'prompts' ? 'active' : ''} onClick={openPromptVault}>提示词库</button></nav>
+      <span className="bar-drag-region" data-tauri-drag-region onDoubleClick={() => controlNativeWindow('maximize')} />
+      {mode === 'canvas' && <div className={`canvas-search canvas-search-in-header ${canvasSearchOpen ? 'expanded' : ''}`}>
+        {canvasSearchOpen ? <><input ref={canvasSearchInputRef} value={canvasSearch} onChange={(event) => setCanvasSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setCanvasSearchOpen(false) } }} placeholder="搜索提示词、模板、模型或分组…" /><button className="canvas-search-close" aria-label="关闭搜索" onClick={() => setCanvasSearchOpen(false)}>×</button></> : <button className="canvas-search-toggle" aria-label="搜索画布" title="搜索画布" onClick={() => setCanvasSearchOpen(true)}><img src="/ui-icons/search.svg" alt="" /></button>}
+        {canvasSearchOpen && canvasSearch && <div className="canvas-search-results">{searchResults.length ? searchResults.map((node) => <button key={node.id} onClick={() => { focusWorkflowNode(node); setCanvasSearchOpen(false) }}><b>{node.kind === 'modify' ? '提示词修改' : '提示词反推'}</b><span>{node.workflowGroupName || node.templateLabel || node.model}</span></button>) : <p>没有匹配节点</p>}</div>}
+      </div>}
+      <button className={`header-icon-button settings-trigger ${settingsOpen ? 'active' : ''}`} title="设置" aria-label="设置" onClick={() => setSettingsOpen((value) => !value)}><img src="/ui-icons/settings.svg" alt="" /></button>
+      <div className="window-controls" aria-label="窗口控制">
+        <button type="button" title="最小化" aria-label="最小化" onClick={() => controlNativeWindow('minimize')}><img src="/ui-icons/window-minimize.svg" alt="" /></button>
+        <button type="button" title="最大化或还原" aria-label="最大化或还原" onClick={() => controlNativeWindow('maximize')}><img src="/ui-icons/window-maximize.svg" alt="" /></button>
+        <button type="button" className="window-close" title="关闭" aria-label="关闭" onClick={() => controlNativeWindow('close')}><img src="/ui-icons/window-close.svg" alt="" /></button>
+      </div>
+    </header>
+    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 1.4.9{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
     {vaultLoaded && <iframe className={`vault-frame ${mode === 'prompts' ? 'active' : ''}`} title="提示词库" src="/prompt-vault.html" />}
-    <main className={`${detailOpen ? '' : 'right-closed'} ${mode === 'prompts' ? 'canvas-hidden' : ''}`}>
+    <main className={`${mode === 'prompts' ? 'canvas-hidden' : ''}`}>
       <aside className={`projects ${drawerOpen ? '' : 'collapsed'}`}>
-        <button className="collapse" title={drawerOpen ? '收起项目库' : '展开项目库'} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? '‹' : '›'}</button>
-        {drawerOpen && <div className="project-content"><div className="project-title"><b>项目库</b><button title="新建项目" onClick={createProject}>＋</button></div><p>双击名称可重命名</p><div className="project-actions"><button onClick={exportProject}>导出项目</button><button onClick={() => projectInput.current?.click()}>导入项目</button><button onClick={loadBackups}>历史备份</button><button className="project-training-button" onClick={() => setProjectTrainingOpen(true)}>{projects.find((item) => item.id === activeProjectId)?.skillTraining ? '训练 Skill' : '设为训练画布'}</button><input ref={projectInput} hidden type="file" accept=".json,.prompt-canvas.json" onChange={(event) => importProject(event.target.files?.[0])} /></div>{showBackups && <div className="backup-list"><header><b>最近备份</b><button onClick={() => setShowBackups(false)}>×</button></header>{backups.length ? backups.map((backup) => <div key={backup.name}><span>{new Date(backup.modifiedAt).toLocaleString()}</span><button onClick={() => restoreBackup(backup.name)}>恢复</button><button onClick={() => removeBackup(backup.name)}>删除</button></div>) : <p>暂无自动备份</p>}</div>}<div className="project-list">{projects.map((project) => <div key={project.id} className={`project-row ${project.id === activeProjectId ? 'active' : ''} ${projectLoad?.projectId === project.id ? 'loading' : ''}`} onClick={() => selectProject(project.id)} onDoubleClick={() => renameProject(project)}><span>{project.name}{project.skillTraining ? ' · 训练' : ''}{projectLoad?.projectId === project.id ? ` · ${projectLoad.total ? `${projectLoad.loaded}/${projectLoad.total}` : '打开中'}` : ''}</span><button title="删除项目" onClick={(event) => { event.stopPropagation(); deleteProject(project) }}>×</button></div>)}</div></div>}
+        <button className="collapse" aria-label={drawerOpen ? '收起项目库' : '展开项目库'} title={drawerOpen ? '收起项目库' : '展开项目库'} onClick={() => setDrawerOpen(!drawerOpen)}>{drawerOpen ? <img src="/ui-icons/project-collapse.svg" alt="" /> : <img src="/ui-icons/project-library.svg" alt="" />}</button>
+        {drawerOpen && <div className="project-content"><div className="project-title"><b>项目库</b></div><div className="project-actions"><button onClick={() => projectInput.current?.click()}>导入</button><button onClick={exportProject}>导出</button><button className="project-new-button" title="新建项目" aria-label="新建项目" onClick={createProject}><img src="/ui-icons/project-add.svg" alt="" /></button><button className="project-history-button" ref={backupTriggerRef} onClick={loadBackups}>历史</button><button className="project-training-button" onClick={() => setProjectTrainingOpen(true)}>{projects.find((item) => item.id === activeProjectId)?.skillTraining ? '训练 Skill' : '设为训练画布'}</button><input ref={projectInput} hidden type="file" accept=".json,.prompt-canvas.json" onChange={(event) => importProject(event.target.files?.[0])} /></div>{showBackups && <section className="backup-list" style={{ left: backupPanelPosition.left, top: backupPanelPosition.top, maxHeight: 'calc(100vh - ' + backupPanelPosition.top + 'px - 12px)' }}>
+  <header className="backup-panel-heading"><div><b>历史备份</b><span className="backup-count">{backups.length} 份</span></div><button aria-label="关闭历史备份" onClick={() => setShowBackups(false)}>×</button></header>
+  <p className="backup-panel-hint">按所属项目分组 · 恢复时会新建项目</p>
+  <div className="backup-scope"><button className={backupScope === 'all' ? 'active' : ''} aria-pressed={backupScope === 'all'} onClick={() => setBackupScope('all')}>全部项目</button><button className={backupScope === 'current' ? 'active' : ''} aria-pressed={backupScope === 'current'} onClick={() => setBackupScope('current')}>当前项目</button></div>
+  <label className="backup-search"><span>搜索项目名称</span><input value={backupSearch} onChange={(event) => setBackupSearch(event.target.value)} placeholder="搜索项目或备份" /></label>
+  <div className="backup-panel-summary"><span>{backupGroups.reduce((total, group) => total + group.backups.length, 0)} 份备份 · {backupGroups.length} 个项目</span><small>按时间倒序</small></div>
+  <div className="backup-group-list">{backupGroups.length ? backupGroups.map((group) => <details className="backup-project-group" key={group.key} open={group.isCurrent}><summary><span><b>{group.projectName}</b>{group.projectId && <small>项目编号 · {group.projectId.slice(0, 8)}</small>}</span><em>{group.backups.length} 份</em></summary><div className="backup-project-items">{group.backups.map((backup) => <article className="backup-item" key={backup.name}><div className="backup-item-info"><b>{new Date(backup.modifiedAt).toLocaleString()}</b><span>自动备份 · {formatBackupSize(backup.size)}</span></div><div className="backup-item-actions"><button className="backup-restore" onClick={() => restoreBackup(backup.name)}>恢复为新项目</button><button className="backup-delete" onClick={() => removeBackup(backup.name)}>删除</button></div></article>)}</div></details>) : <p className="backup-empty">{backupSearch ? '没有匹配的历史备份' : backupScope === 'current' ? '当前项目还没有自动备份' : '暂无自动备份'}</p>}</div>
+  <footer className="backup-panel-footer">备份文件仍保存在本机</footer>
+</section>}<div className="project-list">{projects.map((project) => <div key={project.id} className={`project-row ${project.id === activeProjectId ? 'active' : ''} ${projectLoad?.projectId === project.id ? 'loading' : ''}`} onClick={() => selectProject(project.id)} onDoubleClick={() => renameProject(project)}><span>{project.name}{project.skillTraining ? ' · 训练' : ''}{projectLoad?.projectId === project.id ? ` · ${projectLoad.total ? `${projectLoad.loaded}/${projectLoad.total}` : '打开中'}` : ''}</span><button className="project-row-delete" title="删除项目" aria-label="删除项目" onClick={(event) => { event.stopPropagation(); deleteProject(project) }}><img src="/ui-icons/window-close.svg" alt="" /></button></div>)}</div></div>}
       </aside>
       <section ref={boardRef} className="board" onPasteCapture={pasteCanvasPrompt} onDragEnterCapture={allowImageDrop} onDragOverCapture={allowImageDrop} onDropCapture={importDroppedImages}>
         {projectLoad?.projectId === activeProjectId && <div className="project-load-status" role="status">{projectLoad.total ? `图片加载中 ${projectLoad.loaded}/${projectLoad.total}，画布已可操作` : '正在打开项目…'}</div>}
-        <button className="asset-library-trigger" style={{ left: 16, right: 'auto' }} title="项目素材（不占用画布面积）" onClick={() => { setAssetDrawerOpen((value) => !value); if (!assetDrawerOpen) { void syncSelectedFileToAssets().finally(() => refreshProjectAssets()) } }}>▣ 素材</button>
-        {assetDrawerOpen && <aside className="asset-library-drawer"><header><div><small>PROJECT ASSETS</small><b>项目素材</b></div><button title="收起素材库" onClick={() => setAssetDrawerOpen(false)}>×</button></header><div className="asset-library-filters"><input value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)} placeholder="搜索名称、标签…" /><select value={assetKind} onChange={(event) => setAssetKind(event.target.value)}><option value="all">全部类型</option><option value="image">导入图片</option><option value="generated">生成结果</option></select></div><p>原图保存在本机项目素材中；画布只保存引用与缩略图。</p><div className="asset-library-list">{projectAssets.filter((asset) => (assetKind === 'all' || asset.kind === assetKind) && `${asset.name} ${(asset.tags || []).join(' ')}`.toLowerCase().includes(assetFilter.toLowerCase())).map((asset) => { const usage = (sceneRef.current.elements || []).filter((item) => item.fileId === asset.id && !item.isDeleted).length; return <article key={asset.id}><img src={asset.thumbnailDataUrl || ''} alt="" /><div><b>{asset.name}</b><small>{asset.kind === 'generated' ? '生成结果' : '图片'} · 已用 {usage} 次</small>{asset.tags?.length > 0 && <span>{asset.tags.join(' · ')}</span>}{asset.sourceUrl && <a onClick={() => openExternalUrl(asset.sourceUrl)}>来源链接</a>}</div><button onClick={() => placeProjectAsset(asset)}>放回画布</button></article> })}{!projectAssets.length && <div className="asset-library-empty">本项目还没有素材。导入图片、插件发送图片和生图结果会自动收录到这里。</div>}</div></aside>}
-        <div className="canvas-search"><input value={canvasSearch} onChange={(event) => setCanvasSearch(event.target.value)} placeholder="搜索提示词、模板、模型或分组…" />{canvasSearch && <div className="canvas-search-results">{searchResults.length ? searchResults.map((node) => <button key={node.id} onClick={() => focusWorkflowNode(node)}><b>{node.kind === 'modify' ? '提示词修改' : '提示词反推'}</b><span>{node.workflowGroupName || node.templateLabel || node.model}</span></button>) : <p>没有匹配节点</p>}</div>}</div>
-        <div className="workflow-history-bar"><button title="撤销节点操作" disabled={!nodeHistoryRef.current.past.length} onClick={() => restoreNodeHistory('undo')}>↶</button><button title="重做节点操作" disabled={!nodeHistoryRef.current.future.length} onClick={() => restoreNodeHistory('redo')}>↷</button></div>
-        <button className="fit-canvas" style={{ position: 'absolute', zIndex: 6, right: 'calc(min(340px, 42%) + 24px)', top: 10, height: 34, border: '1px solid #d4cce7', borderRadius: 9, background: '#fff', color: '#393445', padding: '0 11px', cursor: 'pointer', whiteSpace: 'nowrap' }} onMouseDown={(event) => event.preventDefault()} onClick={() => api.current?.scrollToContent(sceneRef.current.elements, { fitToViewport: true, viewportZoomFactor: 0.85 })}>查看全部</button>
-        {(selectedNodeIds.length > 0 || canComposeGeneration) && <div className="workflow-selection-bar" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }} style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}>{selectedNodeIds.length > 0 && <><b>已选 {selectedNodeIds.length} 个节点</b><button onClick={duplicateSelectedWorkflowNodes}>复制</button><button onClick={groupSelectedWorkflowNodes}>分组</button><button onClick={renameSelectedGroup}>改名</button><button onClick={ungroupSelected}>解散</button><button onClick={collapseSelected}>折叠/展开</button><button onClick={connectSelectedToImage}>连接图片</button><button onClick={() => reorderSelected(false)}>置底</button><button onClick={() => reorderSelected(true)}>置顶</button><button onClick={deleteSelectedWorkflowNodes}>删除</button></>}{canComposeGeneration && <button type="button" className="primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); generateComposition() }}>用提示词＋产品图生图</button>}</div>}
+        <button className="skill-library-canvas" title="Skill 库" onClick={() => setSkillLibraryOpen(true)}>Skill</button><button className="asset-library-trigger" title="项目素材" aria-expanded={assetDrawerOpen} onClick={() => { setAssetDrawerOpen((value) => !value); if (!assetDrawerOpen) { void syncSelectedFileToAssets().finally(() => refreshProjectAssets()) } }}>素材</button>
+        {assetDrawerOpen && <aside className="asset-library-drawer" aria-label="项目素材">
+          <div className="asset-library-filters">
+            <input value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)} placeholder="搜索素材" aria-label="搜索素材" />
+            <select value={assetKind} onChange={(event) => setAssetKind(event.target.value)} aria-label="素材类型"><option value="all">全部类型</option><option value="image">图片</option><option value="generated">生成结果</option></select>
+          </div>
+          <div className="asset-library-list">{projectAssets.filter((asset) => (assetKind === 'all' || asset.kind === assetKind) && `${asset.name} ${(asset.tags || []).join(' ')}`.toLowerCase().includes(assetFilter.toLowerCase())).map((asset) => {
+            const format = (asset.mimeType || 'image').replace('image/', '').toUpperCase()
+            const size = asset.bytes ? `${(asset.bytes / 1048576).toFixed(1)} MB` : '本地素材'
+            return <article key={asset.id} className="asset-library-card">
+              <img className="asset-library-thumbnail" src={asset.thumbnailDataUrl || ''} alt="" />
+              <div className="asset-library-info"><b title={asset.name}>{asset.name || '画布图片'}</b><small>{format} · {size}</small>{asset.sourceUrl && <a title="打开来源链接" onClick={() => openExternalUrl(asset.sourceUrl)}>来源链接</a>}</div>
+              <button className="asset-library-return" onClick={() => placeProjectAsset(asset)}>放回画布</button>
+              <button className="asset-library-download" title="下载原图" aria-label={`下载${asset.name || '素材'}原图`} onClick={() => void downloadProjectAsset(asset)}><img src="/ui-icons/inbox-download.svg" alt="" /></button>
+            </article>
+          })}{!projectAssets.length && <div className="asset-library-empty">本项目还没有素材。导入图片、插件发送图片和生图结果会自动收录到这里。</div>}</div>
+        </aside>}
+
+        <button className={`fit-canvas ${canvasSearchOpen ? 'search-open' : ''}`} onMouseDown={(event) => event.preventDefault()} onClick={() => api.current?.scrollToContent(sceneRef.current.elements, { fitToViewport: true, viewportZoomFactor: 0.85 })}>查看全部</button>
+        {selectedPromptToolbarPosition && <div className="generated-image-toolbar prompt-text-toolbar" style={selectedPromptToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
+          <span>仅使用所选文字</span>
+          <button className="primary" title="仅发送所选提示词，不发送画布图片或参考图" onClick={generateSelectedCanvasText} disabled={canvasTextGenerationBusy}>{canvasTextGenerationBusy ? '正在生成…' : '✦ 纯提示词生图'}</button>
+        </div>}
+        {selectedNodeIds.length > 0 && <div className="workflow-selection-bar node-selection-toolbar" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }}><b className="workflow-selection-count">已选{selectedNodeIds.length}个节点</b><button type="button" onClick={duplicateSelectedWorkflowNodes}>复制</button><button type="button" onClick={collapseSelected}>折叠/展开</button><button type="button" onClick={connectSelectedToImage}>连接图片</button><button type="button" onClick={deleteSelectedWorkflowNodes}>删除</button></div>}
+        {canComposeGeneration && <div className="workflow-selection-bar composition-selection-bar" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }} style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}><button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setCompositionPanelOpen(true) }}>组合生图设置</button><button type="button" className="primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); generateComposition() }}>用提示词＋产品图生图</button></div>}
         {blenderReferencePair && <div className="workflow-selection-bar" style={{ top: 112, maxWidth: 'calc(100% - 32px)' }}><b>已选 Blender 产品图＋场景参考图</b><button className="primary" onClick={applyReferenceSceneToBlender} disabled={blenderReferenceBusy}>{blenderReferenceBusy ? '正在反推并适配产品…' : '以参考图反推并写入 Blender 卡片'}</button></div>}
         <Excalidraw key={`${activeProjectId}:${canvasInstanceVersion}`} theme={canvasTheme === 'light' ? 'light' : 'dark'} onPaste={(data) => {
           if (!isMultilinePromptPaste(data)) return true
           const text = wrapPastedPromptForCanvas(normalizePastedPrompt(data.text))
           if (!text) return true
-          data.elements = convertToExcalidrawElements([{ type: 'text', text, x: 0, y: 0, fontSize: 20 }])
+          data.elements = convertToExcalidrawElements([{ type: 'text', text, x: 0, y: 0, fontSize: 20, fontFamily: CANVAS_TEXT_FONT_FAMILY }])
           delete data.text
           return true
         }} excalidrawAPI={(instance) => {
@@ -2457,8 +3071,8 @@ function App() {
           // initialData 会先被 Excalidraw 内部默认状态覆盖一次；实例就绪后的下一帧再同步，
           // 才能保证实际绘制的 canvas 与项目保存的背景一致。
           const background = CANVAS_BACKGROUND
-          requestAnimationFrame(() => instance.updateScene({ appState: { viewBackgroundColor: background } }))
-        }} initialData={{ ...initialScene, files: displayFilesRef.current }} langCode="zh-CN" onLinkOpen={(element, event) => { event.preventDefault(); openExternalUrl(element.link).catch((error) => alert(`链接打开失败：${errorMessage(error)}`)) }} onChange={(elements, incomingAppState, files) => {
+          requestAnimationFrame(() => instance.updateScene({ appState: { viewBackgroundColor: background, currentItemFontFamily: CANVAS_TEXT_FONT_FAMILY } }))
+        }} initialData={{ ...initialScene, appState: { ...initialScene.appState, currentItemFontFamily: CANVAS_TEXT_FONT_FAMILY }, files: displayFilesRef.current }} langCode="zh-CN" onLinkOpen={(element, event) => { event.preventDefault(); openExternalUrl(element.link).catch((error) => alert(`链接打开失败：${errorMessage(error)}`)) }} onChange={(elements, incomingAppState, files) => {
           // 以项目状态为唯一真源，拒绝 Excalidraw 异步恢复时携带的陈旧背景值。
           const expectedBackground = CANVAS_BACKGROUND
           const appState = incomingAppState.viewBackgroundColor === expectedBackground
@@ -2501,7 +3115,7 @@ function App() {
               setSelectedCanvasIds(selectedCanvasIds)
               setSelectedNodeIds((scene.workflowNodes || []).filter((node) => selectedCanvasIds.includes(node.sourceElementId)).map((node) => node.id))
               const hit = selectedCanvasIds.length ? elements.find((element) => element.id === selectedCanvasIds[0]) : null
-              const file = hit?.fileId ? (scene.files[hit.fileId]?.dataURL ? scene.files[hit.fileId] : files[hit.fileId]) : null
+              const file = hit?.fileId ? canvasFileFor(hit.fileId, files[hit.fileId]) : null
               setSelected(hit ? { ...hit, file } : null)
             }
             return
@@ -2523,12 +3137,11 @@ function App() {
             const before = previousPositions[node.sourceElementId], after = nextPositions[node.sourceElementId]
             return before && after && (before.x !== after.x || before.y !== after.y) ? { ...node, x: node.x + after.x - before.x, y: node.y + after.y - before.y } : node
           })
-          const nodesMoved = nodes.length !== originalNodes.length || nodes.some((node, index) => node.x !== originalNodes[index]?.x || node.y !== originalNodes[index]?.y)
           sourcePositionsRef.current = nextPositions
           const originalFiles = { ...files, ...scene.files }
-          for (const [id, file] of Object.entries(files)) if (!originalFiles[id]?.dataURL) originalFiles[id] = file
+          for (const [id, file] of Object.entries(files)) if (!originalFiles[id]) originalFiles[id] = file
           sceneRef.current = { elements, appState, files: originalFiles, workflowNodes: nodes }
-          if (nodesMoved) renderWorkflowOnFrame(nodes)
+          renderWorkflowOnFrame(nodes)
           persist(elements, appState, originalFiles, nodes)
           // Covers Excalidraw's own paste / drag-drop importer as well as our buttons.
           if (!projectHydratingRef.current) void syncCanvasFilesToAssets(originalFiles)
@@ -2542,75 +3155,117 @@ function App() {
           }
           setSelected((previous) => {
             if (!hit) return null
-            const file = originalFiles[hit.fileId]
+            const file = canvasFileFor(hit.fileId, originalFiles[hit.fileId])
             return previous?.id === hit.id && previous.file?.dataURL === file?.dataURL ? previous : { ...hit, file }
           })
         }} UIOptions={{ tools: { diamond: false, ellipse: false }, canvasActions: { loadScene: false, saveToActiveFile: false, export: false, toggleTheme: false } }} validateEmbeddable={() => false} aiEnabled={false}>
-          <MainMenu><MainMenu.DefaultItems.SaveAsImage /></MainMenu>
+
         </Excalidraw>
-        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
+        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedTemplateId={selectedTemplateId} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onModifyAndGenerate={async (node) => { const output = await runNode(node, true); if (!output) return; const latestNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; await generatePreview({ ...latestNode, output, outputInstruction: node.instruction || '' }) }} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
          {selectedImageToolbarPosition && <div className="generated-image-toolbar" style={selectedImageToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
-           <button className="text-edit-primary" onClick={openTextEditForSelection}>▣ 编辑文字</button>
-           <button className="quick-edit-primary" onClick={openQuickEditForSelection}>✦ 快速编辑</button>
-           {selected?.customData?.promptNodeId && <><button onClick={downloadGeneratedOriginal}>⇩ 下载原图</button><button onClick={saveGeneratedImageToVault}>★ 收藏到提示词库</button></>}
-           <button className="primary" onClick={openMultiAngleForSelection} disabled={multiAnglePreparing}>{multiAnglePreparing ? '正在读取原图…' : '◇ 多角度'}</button>
-           <button onClick={() => setSkillLibraryOpen(true)}>✦ Skill</button>
-           <button onClick={() => { setSelected(null); setSelectedCanvasIds([]); setSelectedNodeIds([]); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消</button>
-         </div>}
-         {textEditOpen && <TextEditDialog items={textEditItems} onChange={(id, value) => setTextEditItems((current) => current.map((item) => item.id === id ? { ...item, value } : item))} onGenerate={runTextEdit} onClose={() => !textEditBusy && setTextEditOpen(false)} busy={textEditBusy} recognizing={textEditRecognizing} error={textEditError} />}
+           <div className="image-edit-segment" role="group" aria-label="图片编辑方式">
+             <button className={quickEditOpen ? 'active' : ''} onClick={openQuickEditForSelection}>快速编辑</button>
+             <button className={multiAngleOpen ? 'active' : ''} onClick={openMultiAngleForSelection} disabled={multiAnglePreparing}>{multiAnglePreparing ? '准备中…' : '多角度'}</button>
+             <button className={textEditOpen ? 'active' : ''} onClick={openTextEditForSelection}>编辑文字</button>
+           </div>
+           <button className="image-toolbar-reverse" onClick={runReversePrompt} disabled={reverseBusy || !selectedFile?.dataURL} title="反推提示词" aria-label="反推提示词">{reverseBusy ? '正在反推…' : '反推提示词'}</button>
+           <div className="image-toolbar-more" ref={selectedImageMoreRef}>
+             <button className={`image-toolbar-more-trigger ${selectedImageMoreOpen ? 'active' : ''}`} aria-label="更多图片操作" aria-expanded={selectedImageMoreOpen} title="更多图片操作" onClick={() => setSelectedImageMoreOpen((value) => !value)}>⋯</button>
+             {selectedImageMoreOpen && <div className="image-toolbar-more-menu" role="menu">
+               <label className="reverse-template-picker">反推模板<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>{(aiStatus?.promptTemplates || []).map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select></label>
+               {selected?.customData?.promptNodeId && <button role="menuitem" onClick={() => { void saveGeneratedImageToVault(); setSelectedImageMoreOpen(false) }}>收藏到提示词库</button>}
+               <button role="menuitem" onClick={() => { setSkillLibraryOpen(true); setSelectedImageMoreOpen(false) }}>✦ Skill 库</button>
+               <button role="menuitem" onClick={() => { setSelected(null); setSelectedCanvasIds([]); setSelectedNodeIds([]); setSelectedImageMoreOpen(false); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消选择</button>
+             </div>}
+           </div>
+           {selected?.customData?.promptNodeId && <button className="image-toolbar-download" title="下载原图" aria-label="下载原图" onClick={() => void downloadGeneratedOriginal()}><img src="/ui-icons/inbox-download.svg" alt="" /></button>}
+         </div>}         {textEditOpen && <TextEditDialog items={textEditItems} onChange={(id, value) => setTextEditItems((current) => current.map((item) => item.id === id ? { ...item, value } : item))} onGenerate={runTextEdit} onClose={() => !textEditBusy && setTextEditOpen(false)} busy={textEditBusy} recognizing={textEditRecognizing} error={textEditError} />}
          {quickEditOpen && selectedImageToolbarPosition && <QuickEditPopover value={quickEditText} onChange={setQuickEditText} onSubmit={runQuickEdit} onClose={() => !quickEditBusy && setQuickEditOpen(false)} busy={quickEditBusy} error={quickEditError} position={quickEditPosition} />}
          {multiAngleOpen && <MultiAngleDialog value={assistantGenerationValue} previewUrl={selectedFile?.dataURL || ''} onClose={() => setMultiAngleOpen(false)} onUse={applyMultiAngleAndGenerate} />}
+         <section className={`canvas-generation-dock ${generationInputExpanded ? 'input-expanded' : ''}`} style={{ '--assistant-font-scale': assistantFontScale }} onPointerDown={(event) => event.stopPropagation()}>
+            {!generationHistoryOpen && chatMessages.length > 0 && <button className="generation-history-toggle" aria-expanded={false} onClick={() => setGenerationHistoryOpen(true)}><img src="/ui-icons/generation-records.svg" alt="" /><span className="generation-history-label">生成记录</span></button>}
+           {generationHistoryOpen && <section className="canvas-generation-history">
+             <header className="canvas-chat-header"><button className="canvas-chat-new" onClick={startNewChat} disabled={!chatMessages.length}>新对话</button><button className="canvas-chat-collapse" aria-label="收起对话" title="收起对话" onClick={() => setGenerationHistoryOpen(false)}><img src="/ui-icons/collapse-history.svg" alt="" /></button></header>
+             <div className="chat-list" ref={chatListRef}>
+               {chatMessages.map((message) => {
+                 const linkedNode = message.nodeId ? workflowNodes.find((node) => node.id === message.nodeId) : null
+                 const liveText = message.source === 'generation' && linkedNode?.generationBusy ? linkedNode.generationStatus || message.text : message.text
+                 return <article key={message.id} className={`${message.role} ${message.role === 'assistant' && message.isPrompt ? 'prompt-card' : ''}`}>
+                   <header><b>{message.role === 'user' ? '你' : message.role === 'error' ? '处理失败' : message.source === 'reverse' ? '图片反推提示词' : message.source === 'generation' ? '生图记录' : message.isPrompt ? '提示词' : message.model || '助手记录'}</b><time>{new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>
+                   {message.role === 'assistant' && message.isPrompt && <div className="result-meta"><span>{message.model || '当前模型'}</span><span>{message.templateLabel || '提示词结果'}</span>{message.linkedToNode && <span>已写入画布</span>}</div>}
+                   <p>{liveText}</p>
+                   {message.role === 'assistant' && message.isPrompt && <footer className="canvas-chat-message-actions"><button onClick={() => applyAssistantResult(message)}>写入节点</button>{message.source === 'reverse' && <button className="primary" onClick={() => { setAssistantInput(message.text); setGenerationHistoryOpen(false) }}>放入输入框</button>}{message.source === 'reverse' && <button onClick={() => void submitCanvasGeneration(message.text, { textOnly: true })}>纯提示词生图</button>}<button onClick={() => navigator.clipboard.writeText(message.text)}>复制</button></footer>}
+                   {message.role === 'assistant' && message.source === 'generation' && message.nodeId && <footer className="canvas-chat-message-actions"><button className="primary" onClick={() => focusGenerationResult(message)}>定位到画布</button></footer>}
+                 </article>
+               })}
+               {!chatMessages.length && <p className="generation-history-empty">发送提示词后，生成状态和结果会显示在这里。</p>}
+             </div>
+           </section>}
+           <div className={`canvas-generation-input-wrap ${generationInputExpanded ? 'expanded' : ''}`}>
+              <textarea className="canvas-generation-input" value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submitCanvasGeneration() } }} placeholder={assistantReferences.length ? '输入你想修改的内容…' : '输入你想生成的画面…'} aria-label="生图提示词" />
+              <button type="button" className="canvas-generation-expand" aria-label={generationInputExpanded ? '收起输入框' : '展开输入框'} aria-expanded={generationInputExpanded} title={generationInputExpanded ? '收起输入框' : '展开输入框'} onClick={() => setGenerationInputExpanded((value) => !value)}><img src="/ui-icons/expand-input.svg" alt="" /></button>
+            </div>
+           <div className="canvas-generation-controls">
+             {assistantReferences.length > 0 && <div className="assistant-reference-strip">{assistantReferences.map((image, index) => <figure key={image.id}><img src={image.dataURL} alt={image.name || `参考图 ${index + 1}`} /><span>{image.canvasElementId ? '画布图片' : `参考图 ${index + 1}`}</span><button type="button" title="移除参考图" onClick={() => removeAssistantReference(image.id)}>×</button></figure>)}</div>}
+             <div className="canvas-generation-upload"><button type="button" className="canvas-upload-button" title="上传参考图片" aria-label="上传参考图片" onClick={() => assistantReferenceInput.current?.click()}><img src="/ui-icons/upload-image.svg" alt="" /><small>图片</small></button><input ref={assistantReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addAssistantReferences(event.target.files); event.target.value = '' }} /></div>
+             <div className="generation-settings-anchor" ref={generationSettingsRef}>
+               <button type="button" className="generation-settings-pill" aria-expanded={generationSettingsOpen} onClick={() => setGenerationSettingsOpen((value) => !value)}>{assistantGenerationSettings.generationAspect} | {assistantGenerationSettings.generationQuality} | {assistantGenerationSettings.generationCount}张</button>
+               {generationSettingsOpen && <div className="generation-settings-popover"><label>比例<select value={assistantGenerationSettings.generationAspect} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationAspect: event.target.value }))}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationSettings.generationQuality} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationQuality: event.target.value }))}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationSettings.generationCount} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationCount: Number(event.target.value) }))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label></div>}
+             </div>
+             <button type="button" className="canvas-generation-send" title="直接生成图片（Ctrl+Enter）" aria-label="直接生成图片" aria-busy={assistantGenerating} onClick={() => void submitCanvasGeneration()} disabled={assistantGenerating || !assistantInput.trim()}><img className="canvas-generation-send-circle" src="/ui-icons/send-circle.svg" alt="" /><img className="canvas-generation-send-arrow" src="/ui-icons/send-up.svg" alt="" /></button>
+           </div>
+         </section>
       </section>
-      <aside className={`detail assistant-detail ${rightTab === 'assistant' ? 'assistant-workbench' : 'service-view'}`} style={{ flexBasis: detailWidth, '--assistant-font-scale': assistantFontScale }}>
-        <div className="detail-resizer" onPointerDown={beginDetailResize} onPointerMove={resizeDetail} onPointerUp={endDetailResize} onPointerCancel={endDetailResize} title="拖动调整侧栏宽度" />
-        <header className="detail-header">
-          <nav className="detail-tabs"><button className="active">提示词助手</button></nav>
-          <button className={`detail-settings ${rightTab === 'service' ? 'active' : ''}`} title="图像服务设置" onClick={() => setRightTab(rightTab === 'service' ? 'assistant' : 'service')}>⚙</button>
-        </header>
-        {rightTab === 'assistant' && <section className="prompt-assistant">
-          <header className="assistant-title"><div><span>提示词工作台</span><h3>提示词助手</h3></div><section className="assistant-title-actions"><button onClick={() => setSkillLibraryOpen(true)}>✦ Skill 库</button><button onClick={startNewChat} disabled={!chatMessages.length}>新建对话</button><button onClick={clearCurrentChat} disabled={!chatMessages.length}>清空</button><span className="model-badge">{aiStatus?.model || '等待模型同步'}</span></section></header>
-          <section className="assistant-context">
-            {selectedFile ? <img src={selectedFile.dataURL} alt="当前关联图片" /> : <div className="context-placeholder">无图片</div>}
-            <div><small>当前上下文</small><strong>{assistantContextTitle}</strong><span>{assistantTemplate}{assistantVersionCount ? ` · V${assistantVersionCount}` : ''}</span></div>
-          </section>
-          {selectedFile && !selectedWorkflowNode && <section className="assistant-reverse-controls"><label>反推模板<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} disabled={!aiStatus?.promptTemplates?.length}>{aiStatus?.promptTemplates?.length ? aiStatus.promptTemplates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>) : <option value="">等待插件同步模板…</option>}</select></label><button className="assistant-reverse-action primary" onClick={runReversePrompt} disabled={reverseBusy || !aiStatus?.promptTemplates?.length}>{reverseBusy ? '正在压缩并反推…' : '反推这张图片的提示词'}</button><small>已选图片可按 Ctrl/Cmd + C，复制全尺寸原图到其他软件。</small></section>}
-          {reverseError && !selectedWorkflowNode && <p className="assistant-inline-error">{reverseError}</p>}
-          {canComposeGeneration && !selectedWorkflowNode && <section className="assistant-composition-panel"><header><b>组合生图</b><span>画布上下文</span></header><p>使用当前文案和产品白底图。额外参考图仅在点击“AI 修改组合提示词”时发送给当前 AI 服务，不会作为产品型号参考。</p><div className="composition-tags"><span>提示词已就绪</span><span>产品参考 ×{selectedProductReferences.length}</span>{compositionReferences.length > 0 && <span>额外参考 ×{compositionReferences.length}</span>}</div><div className="composition-reference-upload"><b>补充参考图（最多 8 张）</b><button type="button" onClick={() => compositionReferenceInput.current?.click()} disabled={compositionReferences.length >= 8}>选择图片</button><input ref={compositionReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addCompositionReferences(event.target.files); event.target.value = '' }} /></div>{compositionReferences.length > 0 && <div className="composition-reference-grid">{compositionReferences.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '额外参考图'} /><input value={image.role || ''} placeholder="用途，如：场景构图" onChange={(event) => updateCompositionReference(image.id, { role: event.target.value })} /><button type="button" onClick={() => removeCompositionReference(image.id)}>删除</button></figure>)}</div>}<textarea className="composition-instruction" value={compositionInstruction} onChange={(event) => setCompositionInstruction(event.target.value)} placeholder="告诉 AI 你要参考什么，例如：借鉴图中的城市道路、双人骑行构图和暖色光线，但保留当前产品…" /><button className="composition-ai-action" onClick={modifyCompositionPrompt} disabled={compositionPromptBusy || !compositionReferences.length}>{compositionPromptBusy ? '正在结合参考图修改…' : '✦ AI 修改组合提示词'}</button>{compositionPromptError && <p className="composition-error">{compositionPromptError}</p>}{compositionPromptResult && <section className="composition-result"><label>修改后的提示词（可直接编辑）<textarea value={compositionPromptResult} onChange={(event) => setCompositionPromptResult(event.target.value)} /></label><div><button className="primary" onClick={generateModifiedComposition}>按修改后提示词组合生图</button><button onClick={() => setCompositionPromptResult('')}>恢复当前文案</button></div></section>}{!compositionPromptResult && <button className="primary" onClick={generateComposition}>按当前文案＋产品图生图</button>}</section>}
-          <section className="assistant-generation-panel">
-            <header><b>生图验证</b><span>参数与当前节点同步</span></header>
-            <div><label>比例<select value={assistantGenerationNode?.generationAspect || GENERATION_DEFAULTS.generationAspect} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationAspect: event.target.value })}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationNode?.generationQuality || GENERATION_DEFAULTS.generationQuality} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationQuality: event.target.value })}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationNode?.generationCount || GENERATION_DEFAULTS.generationCount} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { generationCount: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label></div>
-            <label className="assistant-consistency-toggle"><input type="checkbox" checked={assistantGenerationNode?.productConsistency !== false} disabled={!assistantGenerationNode} onChange={(event) => updateWorkflowNode(assistantGenerationNode.id, { productConsistency: event.target.checked })} />保持产品一致（{selectedFile ? '当前选中图片将作为产品参考' : '使用关联原图'}）</label>
-             {assistantGenerationNode?.generationBusy ? <button className="node-cancel-generation" onClick={() => cancelGeneration(assistantGenerationNode)}>取消生图 · {formatGenerationDuration(Date.now() - Number(assistantGenerationNode.generationStartedAt || Date.now()))}</button> : <button className="primary" disabled={!assistantGenerationNode && !selectedFile} onClick={runAssistantGeneration}>{selectedFile ? '按当前图片生成视角预览' : '生成预览'}{assistantGenerationNode?.generationElapsedMs ? ` · 上次 ${formatGenerationDuration(assistantGenerationNode.generationElapsedMs)}` : ''}</button>}
-             <small>也可以输入：16:9，2K，生成2个方案。调整已生成图片的视角请使用图片上方的“多角度”工具。</small>
-          </section>
-          <div className="chat-list">
-            {selectedWorkflowNode && assistantContext && <article className="current-node-card"><header><b>当前节点提示词</b><span className="sync-badge">实时同步</span></header><div className="result-meta"><span>{selectedWorkflowNode.model || aiStatus?.model || '当前模型'}</span><span>{selectedWorkflowNode.templateLabel || assistantTemplate}</span><span>V{assistantVersionCount}</span></div><p>{assistantContext}</p><footer><button onClick={() => navigator.clipboard.writeText(assistantContext)}>复制当前提示词</button></footer></article>}
-            {chatMessages.map((message) => <article key={message.id} className={`${message.role} ${message.role === 'assistant' && message.isPrompt ? 'prompt-card' : ''}`}><header><b>{message.role === 'user' ? '你' : message.role === 'error' ? '处理失败' : message.source === 'reverse' ? '同步反推结果' : message.isPrompt ? '助手修改版本' : message.model || '助手'}</b><time>{new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>{message.role === 'assistant' && message.isPrompt && <div className="result-meta"><span>{message.model || aiStatus?.model || '当前模型'}</span><span>{message.templateLabel || '助手修改版本'}</span>{message.linkedToNode && <span>已同步节点</span>}</div>}<p>{message.text}</p>{message.role === 'assistant' && message.isPrompt && <footer><button className="primary" onClick={() => applyAssistantResult(message)}>写入节点</button><button onClick={() => applyAssistantResult(message, true)}>保存新版本</button><button onClick={() => generateAssistantMessagePreview(message)} disabled={!selectedWorkflowNode && !selectedFile}>{selectedFile ? '按当前产品图生成预览' : '生成预览'}</button><button onClick={() => navigator.clipboard.writeText(message.text)}>复制</button></footer>}{message.role === 'assistant' && message.source === 'generation' && message.nodeId && <footer className="generation-message-actions"><button className="primary" onClick={() => focusGenerationResult(message)}>定位到画布</button></footer>}</article>)}
-            {chatMessages.filter((message) => message.source === 'document-plan' && !message.taskCardNodeId).slice(-1).map((message) => <button key={message.id} className="document-task-action" onClick={() => { createDocumentTaskCard(message); saveChat(chatMessages.map((item) => item.id === message.id ? { ...item, taskCardNodeId: 'created' } : item)) }}>将最新文档方案写入画布任务卡（可编辑）</button>)}
-          </div>
-          <footer className="assistant-composer">
-            <input ref={documentInput} hidden type="file" multiple onChange={(event) => { void importDocuments(event.target.files); event.target.value = '' }} />
-            <div className="assistant-mode-switch"><button className={assistantMode === 'image' ? 'active' : ''} onClick={() => { setAssistantMode('image'); localStorage.setItem('prompt-vault-assistant-mode', 'image') }}>纯生图</button><button className={assistantMode === 'agent' ? 'active' : ''} onClick={() => { setAssistantMode('agent'); localStorage.setItem('prompt-vault-assistant-mode', 'agent') }}>Agent 沟通</button><small>{assistantMode === 'agent' ? '先与 Mimo 讨论；明确说生成方案后才调用香蕉模型' : '按当前输入直接调用香蕉模型生成'}</small></div>
-            <div className="composer-context"><span>{assistantReferences.length ? `参考图 ×${assistantReferences.length}` : selectedFile ? '画布图片 ×1' : '未关联图片'}</span><span>{selectedWorkflowNode ? `${assistantContextTitle} · V${assistantVersionCount}` : assistantMode === 'agent' ? 'Mimo Agent' : '自由创作'}</span></div>
-            {projectDocuments.length > 0 && <div className="assistant-document-strip" aria-label="当前项目文档">{projectDocuments.map((doc) => <div className={`assistant-document-chip ${doc.enabled ? 'enabled' : ''}`} key={doc.id}><label title={doc.enabled ? '取消本次文档引用' : '在对话中引用此文档'}><input type="checkbox" checked={doc.enabled} onChange={(event) => saveDocuments(projectDocuments.map((item) => item.id === doc.id ? { ...item, enabled: event.target.checked } : item))} /><span title={doc.name}>▤ {doc.name}</span></label><button type="button" title={`移除 ${doc.name}`} onClick={() => { if (window.confirm(`从当前项目移除「${doc.name}」的提取文字？原文件不会删除。`)) saveDocuments(projectDocuments.filter((item) => item.id !== doc.id)) }}>×</button></div>)}</div>}
-            {documentMessage && <p className="assistant-document-message" role="status">{documentMessage}</p>}
-            {assistantReferences.length > 0 && <div className="assistant-reference-strip">{assistantReferences.map((image, index) => <figure key={image.id}><img src={image.dataURL} alt={image.name || `参考图 ${index + 1}`} /><span>{index === 0 ? '原图' : `参考 ${index + 1}`}</span><button type="button" title="移除参考图" onClick={() => removeAssistantReference(image.id)}>×</button></figure>)}</div>}
-            <div className="composer-input"><textarea value={assistantInput} onChange={(event) => setAssistantInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) assistantMode === 'agent' ? sendAssistant() : assistantReferences.length ? generateFromAssistantReferences() : sendAssistant() }} placeholder={assistantMode === 'agent' ? '和 Mimo 沟通你的想法；满意后说“生成 3 个方案”…' : assistantReferences.length ? '说说你想修改什么，未提及的内容会尽量保持不变…' : '描述你想生成的画面…'} /></div>
-            <div className="assistant-composer-controls">
-            <div className="assistant-upload-menu-anchor" ref={uploadMenuRef}>
-              <button type="button" className="assistant-upload-plus" aria-label="添加图片或文件" aria-expanded={uploadMenuOpen} aria-haspopup="menu" onClick={() => setUploadMenuOpen((open) => !open)}>＋</button>
-              {uploadMenuOpen && <div className="assistant-upload-menu" role="menu"><button type="button" role="menuitem" disabled={assistantReferences.length >= 8} onClick={() => { setUploadMenuOpen(false); assistantReferenceInput.current?.click() }}>▧ <span>上传图片</span></button><button type="button" role="menuitem" disabled={documentImporting} onClick={() => { setUploadMenuOpen(false); documentInput.current?.click() }}>▤ <span>上传文件</span></button></div>}
-            </div>
-            <div className="assistant-composer-toolbar"><button type="button" className="assistant-upload-reference" onClick={() => assistantReferenceInput.current?.click()} disabled={assistantReferences.length >= 8}>上传参考图</button><input ref={assistantReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addAssistantReferences(event.target.files); event.target.value = '' }} /><label>尺寸<select value={assistantGenerationSettings.generationAspect} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationAspect: event.target.value }))}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationSettings.generationQuality} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationQuality: event.target.value }))}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationSettings.generationCount} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationCount: Number(event.target.value) }))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>{assistantMode === 'agent' ? <button type="button" className="assistant-send-text" title="发送给 Mimo（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || assistantGenerating || !assistantInput.trim()}>{assistantBusy || assistantGenerating ? '处理中…' : '发送给 Mimo'}</button> : assistantReferences.length ? <button type="button" className="assistant-generate-reference" title="按参考图生成到画布" onClick={() => generateFromAssistantReferences()} disabled={assistantGenerating || !assistantInput.trim()}>{assistantGenerating ? '生成中…' : '生成到画布'}</button> : <button type="button" className="assistant-send-text" title="发送（Ctrl+Enter）" onClick={sendAssistant} disabled={assistantBusy || !assistantInput.trim()}>{assistantBusy ? '发送中…' : '发送'}</button>}</div>
-            </div>
-          </footer>
-        </section>}
-        {rightTab === 'service' && <div className="service-settings-scroll">
-          <section className="assistant-font-setting"><label><span>提示词助手字体大小</span><b>{Math.round(assistantFontScale * 100)}%</b></label><input type="range" min="0.85" max="1.5" step="0.05" value={assistantFontScale} onChange={(event) => { const value = Number(event.target.value); setAssistantFontScale(value); localStorage.setItem('prompt-vault-assistant-font-scale', String(value)) }} /><small>拖动后立即预览，设置会自动保留。</small></section>
-          <section className="image-service-form"><h3>图像服务设置</h3><p>独立于插件模型配置，API Key 仅保存在本机后端。</p>{[['baseUrl','中转站地址'],['apiKey',imageService.hasApiKey ? 'API Key（留空保持原密钥）' : 'API Key'],['model','生图模型'],['generatePath','文生图路径'],['editPath','图生图路径'],['statusPath','任务查询路径（用 {taskId}）'],['cancelPath','取消任务路径（用 {taskId}）'],['defaultSize','默认尺寸']].map(([key,label]) => <label key={key}>{label}<input type={key === 'apiKey' ? 'password' : 'text'} value={imageService[key] || ''} onChange={(event) => setImageService({ ...imageService, [key]: event.target.value })} /></label>)}<section className="download-directory"><label>原图下载目录<input title={imageService.downloadDirectory || '默认：下载/PromptVault 原图'} value={imageService.downloadDirectory || '默认：下载/PromptVault 原图'} readOnly /></label><div><button disabled={directoryDialogBusy} onClick={chooseDownloadDirectory}>{directoryDialogBusy ? '正在选择…' : '选择文件夹'}</button><button disabled={directoryDialogBusy} onClick={resetDownloadDirectory}>恢复默认</button></div></section><label>接口模式<select value={imageService.mode || 'openai'} onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="openai">OpenAI 兼容 / 通用 JSON</option></select></label><div className="service-actions"><button className="primary" onClick={saveImageService}>保存设置</button><button onClick={testImageService}>测试连接</button></div>{imageServiceMessage && <p className="service-message">{imageServiceMessage}</p>}</section>
-        </div>}
-      </aside>
+
     </main>
+    {compositionPanelOpen && canComposeGeneration && <div className="composition-backdrop" onMouseDown={() => setCompositionPanelOpen(false)}>
+      <section className="composition-dialog" role="dialog" aria-modal="true" aria-labelledby="composition-dialog-title" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><small>IMAGE COMPOSITION</small><h2 id="composition-dialog-title">组合生图</h2></div><button aria-label="关闭组合生图设置" onClick={() => setCompositionPanelOpen(false)}>×</button></header>
+        <p className="composition-dialog-intro">用选中的提示词和产品图创建独立生图节点；额外图片只作为场景、构图或风格参考。</p>
+        <div className="composition-source-summary"><span>提示词 · {selectedCanvasPrompt.length} 字</span><span>产品图 · {selectedProductReferences.length} 张</span></div>
+        <div className="composition-product-strip">{selectedProductReferences.map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name} /><figcaption>产品外观参考</figcaption></figure>)}</div>
+        <section className="composition-extra-references"><div className="composition-section-heading"><b>额外参考图（可选）</b><button type="button" onClick={() => compositionReferenceInput.current?.click()}>＋ 添加图片</button><input ref={compositionReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addCompositionReferences(event.target.files); event.target.value = '' }} /></div>
+          {compositionReferences.length > 0 ? <div className="composition-reference-list">{compositionReferences.map((image) => <article key={image.id}><img src={image.dataURL} alt={image.name} /><div><b>{image.name || '参考图片'}</b><select aria-label="参考图用途" value={image.role || '场景、构图或风格参考'} onChange={(event) => updateCompositionReference(image.id, { role: event.target.value })}><option>场景、构图或风格参考</option><option>镜头与构图参考</option><option>光线与色彩参考</option><option>氛围参考</option></select></div><button aria-label="移除此参考图" onClick={() => removeCompositionReference(image.id)}>×</button></article>)}</div> : <p className="composition-empty-hint">不添加参考图时，将直接使用已选提示词与产品图生成。</p>}
+        </section>
+        <label className="composition-instruction">对提示词的补充要求<textarea value={compositionInstruction} onChange={(event) => setCompositionInstruction(event.target.value)} placeholder="例如：参考图片的光线和构图，但不要照搬里面的产品。" /></label>
+        {compositionPromptError && <p className="composition-error">{compositionPromptError}</p>}
+        {compositionPromptResult && <label className="composition-result">修改后的提示词<textarea value={compositionPromptResult} onChange={(event) => setCompositionPromptResult(event.target.value)} /></label>}
+        <footer><button type="button" onClick={() => setCompositionPanelOpen(false)}>取消</button>{compositionReferences.length > 0 && <button type="button" onClick={modifyCompositionPrompt} disabled={compositionPromptBusy}>{compositionPromptBusy ? '正在优化…' : '参考图优化提示词'}</button>}{compositionPromptResult ? <button type="button" className="primary" onClick={generateModifiedComposition}>用修改后提示词生图</button> : <button type="button" className="primary" onClick={() => { generateComposition(); setCompositionPanelOpen(false) }}>直接组合生图</button>}</footer>
+      </section>
+    </div>}
+    {settingsOpen && <div className="image-service-settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
+      <section className="image-service-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsDialogTitle" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="image-service-settings-header">
+          <div className="image-service-settings-title"><img src={settingsSwitchIcon} alt="" /><b id="settingsDialogTitle">设置</b></div>
+          <button className="image-service-settings-close" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13"/></svg></button>
+        </header>
+        <div className="image-service-settings-overview">
+          <section className="settings-font-card">
+            <div><label htmlFor="assistantFontScale">对话文字大小</label><output htmlFor="assistantFontScale">{Math.round(assistantFontScale * 100)}%</output></div>
+            <input id="assistantFontScale" type="range" min="0.85" max="1.5" step="0.05" value={assistantFontScale} style={{ '--range-progress': `${((assistantFontScale - 0.85) / 0.65) * 100}%` }} onChange={(event) => { const value = Number(event.target.value); setAssistantFontScale(value); localStorage.setItem('prompt-vault-assistant-font-scale', String(value)) }} />
+          </section>
+          <section className="settings-download-card">
+            <div className="settings-download-heading"><label htmlFor="downloadDirectoryDisplay">原图下载目录</label><button disabled={directoryDialogBusy} onClick={chooseDownloadDirectory}>{directoryDialogBusy ? '正在选择…' : '选择文件夹'}</button></div>
+            <input id="downloadDirectoryDisplay" title={imageService.downloadDirectory || '双击恢复默认目录'} value={imageService.downloadDirectory || ''} placeholder="C:\User" readOnly onDoubleClick={resetDownloadDirectory} />
+          </section>
+        </div>
+        <section className="image-service-settings-card">
+          <h2>图像设置服务</h2>
+          <div className="image-service-settings-grid">
+            {[
+              ['baseUrl', '中转站地址', 'text'], ['apiKey', 'API地址', 'password'],
+              ['model', '生图模型', 'text'], ['generatePath', '文生图路径', 'text'],
+              ['editPath', '图生图路径', 'text'], ['statusPath', '任务查询路径（用 {taskId}）', 'text'],
+              ['cancelPath', '取消任务路径（用 {taskId}）', 'text'], ['defaultSize', '默认尺寸', 'text'],
+            ].map(([key, label, type]) => <label key={key}>{label}<input type={type} title={key === 'apiKey' ? 'API Key；留空保持原密钥' : undefined} placeholder={key === 'apiKey' ? (imageService.hasApiKey ? '留空保持已保存的密钥' : '请输入 API Key') : ''} value={imageService[key] || ''} onChange={(event) => setImageService({ ...imageService, [key]: event.target.value })} /></label>)}
+            <label>接口模式<select value={imageService.mode || 'openai'} onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="openai">OpenAI 兼容 / 通用 JSON</option></select></label>
+            <div className="image-service-settings-actions"><button onClick={saveImageService}>保存设置</button><button onClick={testImageService}>连接测试</button></div>
+          </div>
+        </section>
+        {imageServiceMessage && <p className="image-service-settings-feedback" role="status">{imageServiceMessage}</p>}
+        <button className="image-service-settings-update" onClick={() => { setSettingsOpen(false); checkAppUpdate() }} disabled={updateChecking}>{updateChecking ? '正在检查…' : '检查更新'}</button>
+      </section>
+    </div>}
     {skillLibraryOpen && <SkillLibrary skills={skills} context={skillContext} projectId={activeProjectId} onUse={async (skill) => { setSkillLibraryOpen(false); await runSkill(skill) }} onSave={saveSkill} onDelete={deleteSkill} onExport={exportSkills} onImport={importSkills} onClose={() => setSkillLibraryOpen(false)} />}
     {projectTrainingOpen && <ProjectSkillTraining project={projects.find((item) => item.id === activeProjectId)} scene={sceneRef.current} skills={skills} onEnable={enableProjectSkillTraining} onSave={saveProjectTrainingSkill} onClose={() => setProjectTrainingOpen(false)} />}
   </div>

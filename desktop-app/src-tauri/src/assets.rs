@@ -12,6 +12,7 @@ pub struct ProjectAsset {
     #[serde(default)] pub tags: Vec<String>,
     #[serde(default)] pub source_url: Option<String>,
     #[serde(default)] pub thumbnail_data_url: Option<String>,
+    #[serde(default)] pub preview_mime_type: Option<String>,
     pub created_at: u64,
     #[serde(default)] pub bytes: u64,
 }
@@ -26,6 +27,7 @@ pub struct ProjectAssetInput {
     #[serde(default)] pub tags: Vec<String>,
     #[serde(default)] pub source_url: Option<String>,
     #[serde(default)] pub thumbnail_data_url: Option<String>,
+    #[serde(default)] pub preview_data_url: Option<String>,
     // 前端与 Excalidraw 均使用 dataURL；URL 缩写不能由 camelCase 规则正确推导。
     #[serde(rename = "dataURL")]
     pub data_url: String,
@@ -40,6 +42,7 @@ fn root(app: &AppHandle, project_id: &str) -> Result<std::path::PathBuf, String>
     if !valid(project_id) { return Err("项目编号无效".into()); }
     let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("project-assets").join(project_id);
     std::fs::create_dir_all(root.join("originals")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(root.join("previews")).map_err(|e| e.to_string())?;
     Ok(root)
 }
 fn index_path(app: &AppHandle, project_id: &str) -> Result<std::path::PathBuf, String> { Ok(root(app, project_id)?.join("assets.json")) }
@@ -55,6 +58,7 @@ fn write_index(app: &AppHandle, project_id: &str, values: &[ProjectAsset]) -> Re
 }
 fn extension(mime: &str) -> &'static str { match mime { "image/png" => "png", "image/webp" => "webp", "image/gif" => "gif", "image/bmp" => "bmp", "image/svg+xml" => "svg", _ => "jpg" } }
 fn file_path(app: &AppHandle, project_id: &str, asset: &ProjectAsset) -> Result<std::path::PathBuf, String> { Ok(root(app, project_id)?.join("originals").join(format!("{}.{}", asset.id, extension(&asset.mime_type)))) }
+fn preview_path(app: &AppHandle, project_id: &str, asset: &ProjectAsset) -> Result<std::path::PathBuf, String> { Ok(root(app, project_id)?.join("previews").join(format!("{}.{}", asset.id, extension(asset.preview_mime_type.as_deref().unwrap_or("image/webp"))))) }
 
 pub fn list(app: &AppHandle, project_id: &str) -> Result<Vec<ProjectAsset>, String> { read_index(app, project_id) }
 pub fn save(app: &AppHandle, project_id: &str, input: ProjectAssetInput) -> Result<ProjectAsset, String> {
@@ -62,9 +66,18 @@ pub fn save(app: &AppHandle, project_id: &str, input: ProjectAssetInput) -> Resu
     let (_, encoded) = input.data_url.split_once(',').ok_or("图片数据格式无效")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "图片数据解码失败")?;
     if bytes.is_empty() || bytes.len() > 80 * 1024 * 1024 { return Err("单张素材需小于 80MB".into()); }
+    let (preview_bytes, preview_mime_type) = if let Some(data_url) = input.preview_data_url.as_deref() {
+        let (header, encoded) = data_url.split_once(',').ok_or("图片预览数据格式无效")?;
+        let mime_type = header.strip_prefix("data:").and_then(|value| value.strip_suffix(";base64")).ok_or("图片预览格式无效")?;
+        if !mime_type.starts_with("image/") { return Err("图片预览格式无效".into()); }
+        let preview = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "图片预览解码失败")?;
+        if preview.is_empty() || preview.len() > 12 * 1024 * 1024 { return Err("图片预览文件过大".into()); }
+        (Some(preview), Some(mime_type.to_string()))
+    } else { (None, None) };
     let mut index = read_index(app, project_id)?;
-    let record = ProjectAsset { id: input.id, name: input.name.chars().take(180).collect(), mime_type: input.mime_type, kind: input.kind, tags: input.tags.into_iter().map(|v| v.chars().take(40).collect()).take(20).collect(), source_url: input.source_url.filter(|v| v.starts_with("http://") || v.starts_with("https://")), thumbnail_data_url: input.thumbnail_data_url, created_at: chrono::Utc::now().timestamp_millis().max(0) as u64, bytes: bytes.len() as u64 };
+    let record = ProjectAsset { id: input.id, name: input.name.chars().take(180).collect(), mime_type: input.mime_type, kind: input.kind, tags: input.tags.into_iter().map(|v| v.chars().take(40).collect()).take(20).collect(), source_url: input.source_url.filter(|v| v.starts_with("http://") || v.starts_with("https://")), thumbnail_data_url: input.thumbnail_data_url, preview_mime_type, created_at: chrono::Utc::now().timestamp_millis().max(0) as u64, bytes: bytes.len() as u64 };
     std::fs::write(file_path(app, project_id, &record)?, bytes).map_err(|e| e.to_string())?;
+    if let Some(preview) = preview_bytes { std::fs::write(preview_path(app, project_id, &record)?, preview).map_err(|e| e.to_string())?; }
     index.retain(|item| item.id != record.id); index.push(record.clone()); write_index(app, project_id, &index)?; Ok(record)
 }
 pub fn read(app: &AppHandle, project_id: &str, asset_id: &str) -> Result<ProjectAssetContent, String> {
@@ -73,9 +86,21 @@ pub fn read(app: &AppHandle, project_id: &str, asset_id: &str) -> Result<Project
     let bytes = std::fs::read(file_path(app, project_id, &asset)?).map_err(|_| "素材原图不存在")?;
     Ok(ProjectAssetContent { data_url: format!("data:{};base64,{}", asset.mime_type, base64::engine::general_purpose::STANDARD.encode(bytes)), asset })
 }
+pub fn read_preview(app: &AppHandle, project_id: &str, asset_id: &str) -> Result<ProjectAssetContent, String> {
+    if !valid(asset_id) { return Err("素材编号无效".into()); }
+    let asset = read_index(app, project_id)?.into_iter().find(|item| item.id == asset_id).ok_or("找不到项目素材")?;
+    let path = preview_path(app, project_id, &asset)?;
+    if path.exists() {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let mime_type = asset.preview_mime_type.as_deref().unwrap_or("image/webp");
+        return Ok(ProjectAssetContent { data_url: format!("data:{};base64,{}", mime_type, base64::engine::general_purpose::STANDARD.encode(bytes)), asset });
+    }
+    if let Some(data_url) = asset.thumbnail_data_url.clone() { return Ok(ProjectAssetContent { asset, data_url }); }
+    Err("项目素材没有预览图".into())
+}
 pub fn remove(app: &AppHandle, project_id: &str, asset_id: &str) -> Result<(), String> {
     let mut index = read_index(app, project_id)?; let asset = index.iter().find(|item| item.id == asset_id).cloned(); index.retain(|item| item.id != asset_id); write_index(app, project_id, &index)?;
-    if let Some(item) = asset { let path = file_path(app, project_id, &item)?; if path.exists() { std::fs::remove_file(path).map_err(|e| e.to_string())?; } } Ok(())
+    if let Some(item) = asset { let path = file_path(app, project_id, &item)?; if path.exists() { std::fs::remove_file(path).map_err(|e| e.to_string())?; } let preview = preview_path(app, project_id, &item)?; if preview.exists() { std::fs::remove_file(preview).map_err(|e| e.to_string())?; } } Ok(())
 }
 pub fn remove_all(app: &AppHandle, project_id: &str) -> Result<(), String> {
     let path = root(app, project_id)?; if path.exists() { std::fs::remove_dir_all(path).map_err(|e| e.to_string())?; } Ok(())

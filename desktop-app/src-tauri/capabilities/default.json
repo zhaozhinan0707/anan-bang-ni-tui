@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "阿男帮你推默认权限",
   "windows": ["main"],
-  "permissions": ["core:default", "updater:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+    "updater:default"
+  ]
 }
