@@ -529,17 +529,30 @@ const workflowNodeDimensions = (node) => {
   const referenceCount = Math.min(8, (node.referenceImages || []).length || (node.referenceImage ? 1 : 0))
   const extraReferenceRows = Math.max(0, Math.ceil(referenceCount / 5) - 1) * 92
   if (node.kind === 'prompt') return { width: 523, height: node.collapsed ? 48 : 374 }
-  if (node.kind === 'compose') return { width: 523, height: node.collapsed ? 42 : 374 }
+  if (node.kind === 'compose') return { width: 523, height: node.collapsed ? 42 : Math.max(374, Number(node.composeHeight) || 374) }
   if (node.kind === 'modify') return { width: 523, height: node.collapsed ? 48 : 698 + extraReferenceRows }
   return { width: node.width, height: node.collapsed ? 48 : node.height }
 }
 
 function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedTemplateId, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onModifyAndGenerate, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
+  const composeResize = useRef(null)
+  const [composeResizePreview, setComposeResizePreview] = useState(null)
   const [openGenerationSettings, setOpenGenerationSettings] = useState('')
-  const nodeBox = (node) => ({ ...node, ...workflowNodeDimensions(node) })
+  const nodeBox = (node) => ({ ...node, ...workflowNodeDimensions(node), ...(composeResizePreview?.id === node.id ? { height: composeResizePreview.height } : {}) })
   const generationGuardUntil = useRef(0)
   const zoom = viewport.zoom?.value || viewport.zoom || 1
+  useEffect(() => {
+    if (!openGenerationSettings) return undefined
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && event.target.closest?.('.generation-settings-chips-node')) return
+      setOpenGenerationSettings('')
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
+  }, [openGenerationSettings])
   const toScreen = (x, y) => ({ x: (x + (viewport.scrollX || 0)) * zoom, y: (y + (viewport.scrollY || 0)) * zoom })
   const startDrag = (event, node) => {
     const ids = selectedIds.includes(node.id) ? selectedIds : [node.id]
@@ -556,15 +569,61 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
     onMoveMany(drag.current.ids, drag.current.positions, dx, dy)
   }
   const stopDrag = () => { drag.current = null }
+  const startComposeResize = (event, node) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const height = nodeBox(node).height
+    composeResize.current = { id: node.id, startY: event.clientY, startHeight: height, height, zoom }
+    setComposeResizePreview({ id: node.id, height })
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const moveComposeResize = (event) => {
+    if (!composeResize.current) return
+    const height = Math.max(374, Math.min(1400, composeResize.current.startHeight + (event.clientY - composeResize.current.startY) / composeResize.current.zoom))
+    composeResize.current.height = height
+    setComposeResizePreview({ id: composeResize.current.id, height })
+  }
+  const stopComposeResize = () => {
+    if (!composeResize.current) return
+    const { id, height } = composeResize.current
+    composeResize.current = null
+    setComposeResizePreview(null)
+    onUpdate(id, { composeHeight: Math.round(height) })
+  }
   const changeGenerationSetting = (event, node, key, value) => {
     event.stopPropagation()
     generationGuardUntil.current = Date.now() + 650
     onUpdate(node.id, { [key]: value })
   }
-  const runGeneration = (event, node) => {
+  const renderGenerationSettings = (node) => {
+    const settings = [
+      { key: 'generationAspect', label: '比例', value: node.generationAspect || GENERATION_DEFAULTS.generationAspect, options: GENERATION_ASPECTS },
+      { key: 'generationQuality', label: '清晰度', value: node.generationQuality || GENERATION_DEFAULTS.generationQuality, options: ['1K', '2K', '4K'] },
+      { key: 'generationCount', label: '张数', value: Number(node.generationCount || GENERATION_DEFAULTS.generationCount), options: [1, 2, 3, 4] },
+    ]
+    return <div className="generation-settings-chips generation-settings-chips-node" role="group" aria-label="生图参数" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+      {settings.map((setting) => {
+        const menuKey = `${node.id}:${setting.key}`
+        const isOpen = openGenerationSettings === menuKey
+        return <div className="generation-setting-control" key={setting.key}>
+          <button type="button" className="generation-setting-chip" title={`选择${setting.label}`} aria-label={`${setting.label}，当前 ${setting.value}${setting.key === 'generationCount' ? ' 张' : ''}`} aria-haspopup="listbox" aria-expanded={isOpen} onClick={() => setOpenGenerationSettings((current) => current === menuKey ? '' : menuKey)}>
+            <span>{setting.key === 'generationCount' ? `${setting.value}张` : setting.value}</span><img className="generation-setting-chevron" src="/ui-icons/prompt-arrow-down.svg" alt="" />
+          </button>
+          {isOpen && <div className="generation-setting-menu" role="listbox" aria-label={`选择${setting.label}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+            {setting.options.map((option) => {
+              const value = setting.key === 'generationCount' ? Number(option) : option
+              const label = setting.key === 'generationCount' ? `${value}张` : value
+              return <button type="button" role="option" aria-selected={value === setting.value} className={value === setting.value ? 'selected' : ''} key={value} onClick={(event) => { changeGenerationSetting(event, node, setting.key, value); setOpenGenerationSettings('') }}>{label}</button>
+            })}
+          </div>}
+        </div>
+      })}
+    </div>
+  }
+  const runGeneration = (event, node, options = {}) => {
     event.stopPropagation()
     if (Date.now() < generationGuardUntil.current) return
-    onGenerate(node)
+    onGenerate(node, options)
   }
   const elementById = new Map(elements.filter((element) => !element.isDeleted).map((element) => [element.id, element]))
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
@@ -617,7 +676,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
     {nodes.map((node) => {
       const position = toScreen(node.x, node.y), currentTemplate = templates.find((item) => item.id === node.templateId) || templates.find((item) => item.label === node.templateLabel) || templates.find((item) => item.id === selectedTemplateId) || templates[0], text = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt
       const references = node.referenceImages || (node.referenceImage ? [{ ...node.referenceImage, id: `legacy-${node.id}`, role: '补充参考' }] : [])
-      return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''}`} style={{ width: nodeBox(node).width, minHeight: node.collapsed ? 0 : nodeBox(node).height, ...(['compose', 'modify', 'prompt'].includes(node.kind) && !node.collapsed ? { height: nodeBox(node).height } : {}), transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
+      return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''} ${openGenerationSettings.startsWith(`${node.id}:`) ? 'settings-open' : ''}`} style={{ width: nodeBox(node).width, minHeight: node.collapsed ? 0 : nodeBox(node).height, ...(['compose', 'modify', 'prompt'].includes(node.kind) && !node.collapsed ? { height: nodeBox(node).height } : {}), ...(node.kind === 'compose' ? { '--compose-node-height': `${nodeBox(node).height}px` } : {}), transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
         <header className={'node-drag-handle ' + (node.kind === 'prompt' ? 'prompt-node-header' : node.kind === 'compose' ? 'compose-node-header' : node.kind === 'modify' ? 'modify-node-header' : '')} onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点">
           {node.kind === 'prompt' ? <>
             <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
@@ -650,19 +709,12 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
           </label>
           <div className="compose-reference-status"><span className={'node-status ' + (node.status || 'completed')} /><small>{references.length ? '已关联 ' + references.length + ' 张产品参考图；编辑提示词或重新生成均会保留产品参考。' : '未关联产品参考图'}</small></div>
           <label className="compose-prompt-label"><img src="/ui-icons/prompt-text-recognition.svg" alt="" />提示词</label>
-          <textarea className="compose-prompt-editor" aria-label="组合生图提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          <div className="compose-prompt-frame"><textarea className="compose-prompt-editor" aria-label="组合生图提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /><button type="button" className="compose-prompt-resize" aria-label="拖动以拉高提示词框" title="拖动以拉高提示词框" onPointerDown={(event) => startComposeResize(event, node)} onPointerMove={moveComposeResize} onPointerUp={stopComposeResize} onPointerCancel={stopComposeResize}><span /><span /><span /></button></div>
           {node.error && <p className="compose-node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
           {node.generationError && <p className="compose-node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
           {node.generationBusy && <div className="compose-generation-progress"><span>{node.generationStatus || '正在生成…'}</span><button type="button" onClick={() => onCancelGeneration(node)}>取消</button></div>}
           <div className="compose-generation-controls">
-            <div className="compose-settings-anchor">
-              <button type="button" className="compose-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
-              {openGenerationSettings === node.id && <section className="compose-settings-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-              <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
-              <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
-              <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
-              </section>}
-            </div>
+            {renderGenerationSettings(node)}
             <label className="compose-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="compose-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
           </div>
           <footer className="compose-node-actions">
@@ -689,19 +741,12 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
           <textarea className="modify-result-input" aria-label="修改结果" value={node.output || ''} onChange={(event) => onUpdate(node.id, { output: event.target.value, outputInstruction: node.instruction || '', outputTemplateId: node.templateId || '', outputSourcePrompt: node.prompt || '' })} />
           {(node.error || node.generationError) && <p className="modify-node-feedback">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</p>}
           <div className="modify-generation-controls">
-            <div className="modify-settings-anchor">
-              <button type="button" className="modify-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
-              {openGenerationSettings === node.id && <section className="modify-settings-popover" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-                <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
-                <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
-                <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
-              </section>}
-            </div>
+            {renderGenerationSettings(node)}
             <label className="modify-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="modify-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
           </div>
           <footer className="modify-node-actions">
             <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRegenerate(node, true) }} disabled={node.busy || !node.prompt?.trim()}>{node.busy ? '正在修改…' : '提示词修改'}</button>
-            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (node.generationBusy) onCancelGeneration(node); else { const needsPromptUpdate = !node.output?.trim() || node.outputInstruction !== (node.instruction || '') || node.outputTemplateId !== (node.templateId || '') || node.outputSourcePrompt !== (node.prompt || ''); if (needsPromptUpdate) onModifyAndGenerate(node); else runGeneration(event, node) } }} disabled={node.busy || !node.prompt?.trim() || !references.length}>{node.generationBusy ? '取消生图' : '组合生图'}</button>
+            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (node.generationBusy) onCancelGeneration(node); else { const needsPromptUpdate = !node.output?.trim() || node.outputInstruction !== (node.instruction || '') || node.outputTemplateId !== (node.templateId || '') || node.outputSourcePrompt !== (node.prompt || ''); if (needsPromptUpdate) onModifyAndGenerate(node, { textOnly: !references.length }); else runGeneration(event, node, { textOnly: !references.length }) } }} disabled={node.busy || !node.prompt?.trim()}>{node.generationBusy ? '取消生图' : '组合生图'}</button>
             <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
           </footer>
         </section> : node.kind === 'prompt' ? <section className={`prompt-node-body ${node.error || node.generationError ? 'has-error' : ''}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
@@ -716,14 +761,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
           <textarea className="prompt-node-input" aria-label="提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
           {(node.error || node.generationError) && <div className="prompt-node-feedback" role="alert">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</div>}
           <div className="prompt-generation-controls" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-            <div className="prompt-settings-anchor">
-              <button type="button" className="prompt-settings-button" aria-expanded={openGenerationSettings === node.id} onClick={() => setOpenGenerationSettings((current) => current === node.id ? '' : node.id)}>{node.generationAspect || GENERATION_DEFAULTS.generationAspect} | {node.generationQuality || GENERATION_DEFAULTS.generationQuality} | {node.generationCount || GENERATION_DEFAULTS.generationCount}张</button>
-              {openGenerationSettings === node.id && <section className="prompt-settings-popover">
-                <label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label>
-                <label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label>
-                <label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>
-              </section>}
-            </div>
+            {renderGenerationSettings(node)}
             <label className="prompt-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="prompt-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
           </div>
           <footer className="prompt-node-actions">
@@ -743,7 +781,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
         {node.error && <p className="node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
         {node.generationError && <p className="node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
         <GenerationTimingBreakdown timing={node.generationTiming} />
-        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><label>比例<select value={node.generationAspect || GENERATION_DEFAULTS.generationAspect} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationAspect', event.target.value)}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={node.generationQuality || GENERATION_DEFAULTS.generationQuality} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationQuality', event.target.value)}>{['2K','1K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={node.generationCount || GENERATION_DEFAULTS.generationCount} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onChange={(event) => changeGenerationSetting(event, node, 'generationCount', Number(event.target.value))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label>{(node.generationTextOnly !== undefined || textOnlyDefaultForNode(node)) && <label className="consistency-toggle"><input type="checkbox" checked={textOnlyDefaultForNode(node)} onChange={(event) => onUpdate(node.id, { generationTextOnly: event.target.checked })} />纯提示词生成（不发送原图）</label>}{!textOnlyDefaultForNode(node) && <label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label>}</section>
+        <section className="node-generation-settings" onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>{renderGenerationSettings(node)}{(node.generationTextOnly !== undefined || textOnlyDefaultForNode(node)) && <label className="consistency-toggle"><input type="checkbox" checked={textOnlyDefaultForNode(node)} onChange={(event) => onUpdate(node.id, { generationTextOnly: event.target.checked })} />纯提示词生成（不发送原图）</label>}{!textOnlyDefaultForNode(node) && <label className="consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} />保持产品一致</label>}</section>
          <footer>{node.kind === 'prompt' ? <><button onClick={() => onRegenerate(node)} disabled={node.busy}>↻ {node.busy ? '生成中…' : '重新生成'}</button><button className="node-primary" onClick={() => onModify(node)}>✎ 用于提示词修改</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '生成预览'}</button></> : node.kind === 'compose' ? <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy}>◉ {node.generationBusy ? '生成中…' : '按组合生图'}</button> : node.kind === 'skill' ? <>{node.skillOutputType === 'prompt' && <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, { ...node, prompt: node.output, output: node.output })} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '生成中…' : '用结果生成预览'}</button>}<button onClick={() => navigator.clipboard.writeText(node.output || '')}>复制结果</button></> : <><button className="node-primary" onClick={() => onRegenerate(node, true)} disabled={node.busy}>▶ {node.busy ? '生成中…' : '生成修改提示词'}</button><button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.output}>◉ {node.generationBusy ? '改图中…' : '验证改图'}</button></>}{node.generationBusy && <button className="node-cancel-generation" onClick={() => onCancelGeneration(node)}>取消生图</button>}<button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button></footer>
         </>)}
       </article>
@@ -882,7 +920,7 @@ function App() {
   const [canvasSearchOpen, setCanvasSearchOpen] = useState(false)
   const [generationHistoryOpen, setGenerationHistoryOpen] = useState(false)
   const [generationInputExpanded, setGenerationInputExpanded] = useState(false)
-  const [generationSettingsOpen, setGenerationSettingsOpen] = useState(false)
+  const [openGenerationSetting, setOpenGenerationSetting] = useState('')
   const [selectedImageMoreOpen, setSelectedImageMoreOpen] = useState(false)
   const [backups, setBackups] = useState([])
   const [showBackups, setShowBackups] = useState(false)
@@ -906,6 +944,17 @@ function App() {
   const [assistantGenerating, setAssistantGenerating] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
   const chatListRef = useRef(null)
+  useEffect(() => {
+    if (!openGenerationSetting) return undefined
+    const close = (event) => {
+      if (event.type === 'keydown' && event.key !== 'Escape') return
+      if (event.type === 'pointerdown' && generationSettingsRef.current?.contains(event.target)) return
+      setOpenGenerationSetting('')
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
+  }, [openGenerationSetting])
   useEffect(() => {
     if (!generationHistoryOpen) return undefined
     const frame = requestAnimationFrame(() => { if (chatListRef.current) chatListRef.current.scrollTop = chatListRef.current.scrollHeight })
@@ -974,8 +1023,8 @@ function App() {
   const documentInput = useRef(null)
   const uploadMenuRef = useRef(null)
   const selectedImageMoreRef = useRef(null)
-  const generationSettingsRef = useRef(null)
   const canvasSearchInputRef = useRef(null)
+  const generationSettingsRef = useRef(null)
   const lastAutoReferenceElementRef = useRef(null)
   const boardRef = useRef(null)
   const canvasSelectionRef = useRef('')
@@ -1128,17 +1177,6 @@ function App() {
     document.addEventListener('keydown', close)
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
   }, [selectedImageMoreOpen])
-  useEffect(() => {
-    if (!generationSettingsOpen) return undefined
-    const close = (event) => {
-      if (event.type === 'keydown' && event.key !== 'Escape') return
-      if (event.type === 'pointerdown' && generationSettingsRef.current?.contains(event.target)) return
-      setGenerationSettingsOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    document.addEventListener('keydown', close)
-    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', close) }
-  }, [generationSettingsOpen])
   useEffect(() => {
     if (!canvasSearchOpen) return undefined
     requestAnimationFrame(() => canvasSearchInputRef.current?.focus())
@@ -2796,7 +2834,7 @@ function App() {
       const editImage = !explicitEditImage && (editImageCandidate?.assetId || editImageCandidate?.fileId)
         ? await readOriginalFile(editImageCandidate.fileId || editImageCandidate.id)
         : editImageCandidate
-      if (generationNode.kind === 'modify' && !replacementReference && !quickEditRun) throw new Error('请添加产品参考图；生成不会使用原场景图')
+      if (generationNode.kind === 'modify' && !replacementReference && !quickEditRun && !textOnlyRun) throw new Error('请添加产品参考图；生成不会使用原场景图')
       const visualReferenceMode = generationNode.referenceImageMode === 'scene'
       const referenceRoles = requestProductReferences.map((item, index) => `${generationNode.kind === 'blender' ? '结构参考图' : visualReferenceMode ? '画面参考图' : '产品参考图'}${index + 1}用途：${item.role || (visualReferenceMode ? '场景与构图' : '产品外观')}`).join('；')
       const backsideReferenceRole = backsideReference ? '【背面参考图已上传】本次请求的最后一张参考图就是当前产品的背面/另一面。请把它视为同一型号的结构事实，用来补全目标视角中可见的背面，不得把它当成另一款产品或场景风格参考。' : ''
@@ -3028,7 +3066,7 @@ function App() {
   <div className="backup-scope"><button className={backupScope === 'all' ? 'active' : ''} aria-pressed={backupScope === 'all'} onClick={() => setBackupScope('all')}>全部项目</button><button className={backupScope === 'current' ? 'active' : ''} aria-pressed={backupScope === 'current'} onClick={() => setBackupScope('current')}>当前项目</button></div>
   <label className="backup-search"><span>搜索项目名称</span><input value={backupSearch} onChange={(event) => setBackupSearch(event.target.value)} placeholder="搜索项目或备份" /></label>
   <div className="backup-panel-summary"><span>{backupGroups.reduce((total, group) => total + group.backups.length, 0)} 份备份 · {backupGroups.length} 个项目</span><small>按时间倒序</small></div>
-  <div className="backup-group-list">{backupGroups.length ? backupGroups.map((group) => <details className="backup-project-group" key={group.key} open={group.isCurrent}><summary><span><b>{group.projectName}</b>{group.projectId && <small>项目编号 · {group.projectId.slice(0, 8)}</small>}</span><em>{group.backups.length} 份</em></summary><div className="backup-project-items">{group.backups.map((backup) => <article className="backup-item" key={backup.name}><div className="backup-item-info"><b>{new Date(backup.modifiedAt).toLocaleString()}</b><span>自动备份 · {formatBackupSize(backup.size)}</span></div><div className="backup-item-actions"><button className="backup-restore" onClick={() => restoreBackup(backup.name)}>恢复为新项目</button><button className="backup-delete" onClick={() => removeBackup(backup.name)}>删除</button></div></article>)}</div></details>) : <p className="backup-empty">{backupSearch ? '没有匹配的历史备份' : backupScope === 'current' ? '当前项目还没有自动备份' : '暂无自动备份'}</p>}</div>
+  <div className="backup-group-list">{backupGroups.length ? backupGroups.map((group) => <details className="backup-project-group" key={group.key} open={group.isCurrent}><summary><span><b>{group.projectName}</b>{group.projectId && <small>项目编号 · {group.projectId.slice(0, 8)}</small>}</span><em>{group.backups.length} 份</em><img className="backup-chevron" src="/ui-icons/prompt-arrow-down.svg" alt="" /></summary><div className="backup-project-items">{group.backups.map((backup) => <article className="backup-item" key={backup.name}><div className="backup-item-info"><b>{new Date(backup.modifiedAt).toLocaleString()}</b><span>自动备份 · {formatBackupSize(backup.size)}</span></div><div className="backup-item-actions"><button className="backup-restore" onClick={() => restoreBackup(backup.name)}>恢复为新项目</button><button className="backup-delete" onClick={() => removeBackup(backup.name)}>删除</button></div></article>)}</div></details>) : <p className="backup-empty">{backupSearch ? '没有匹配的历史备份' : backupScope === 'current' ? '当前项目还没有自动备份' : '暂无自动备份'}</p>}</div>
   <footer className="backup-panel-footer">备份文件仍保存在本机</footer>
 </section>}<div className="project-list">{projects.map((project) => <div key={project.id} className={`project-row ${project.id === activeProjectId ? 'active' : ''} ${projectLoad?.projectId === project.id ? 'loading' : ''}`} onClick={() => selectProject(project.id)} onDoubleClick={() => renameProject(project)}><span>{project.name}{project.skillTraining ? ' · 训练' : ''}{projectLoad?.projectId === project.id ? ` · ${projectLoad.total ? `${projectLoad.loaded}/${projectLoad.total}` : '打开中'}` : ''}</span><button className="project-row-delete" title="删除项目" aria-label="删除项目" onClick={(event) => { event.stopPropagation(); deleteProject(project) }}><img src="/ui-icons/window-close.svg" alt="" /></button></div>)}</div></div>}
       </aside>
@@ -3162,7 +3200,7 @@ function App() {
         }} UIOptions={{ tools: { diamond: false, ellipse: false }, canvasActions: { loadScene: false, saveToActiveFile: false, export: false, toggleTheme: false } }} validateEmbeddable={() => false} aiEnabled={false}>
 
         </Excalidraw>
-        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedTemplateId={selectedTemplateId} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onModifyAndGenerate={async (node) => { const output = await runNode(node, true); if (!output) return; const latestNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; await generatePreview({ ...latestNode, output, outputInstruction: node.instruction || '' }) }} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
+        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedTemplateId={selectedTemplateId} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onModifyAndGenerate={async (node, options = {}) => { const output = await runNode(node, true); if (!output) return; const latestNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; const generationTextOnly = options.textOnly ?? latestNode.generationTextOnly; if (options.textOnly != null) updateWorkflowNode(node.id, { generationTextOnly: options.textOnly }); await generatePreview({ ...latestNode, output, outputInstruction: node.instruction || '', generationTextOnly }, options) }} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
          {selectedImageToolbarPosition && <div className="generated-image-toolbar" style={selectedImageToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
            <div className="image-edit-segment" role="group" aria-label="图片编辑方式">
              <button className={quickEditOpen ? 'active' : ''} onClick={openQuickEditForSelection}>快速编辑</button>
@@ -3186,7 +3224,7 @@ function App() {
          <section className={`canvas-generation-dock ${generationInputExpanded ? 'input-expanded' : ''}`} style={{ '--assistant-font-scale': assistantFontScale }} onPointerDown={(event) => event.stopPropagation()}>
             {!generationHistoryOpen && chatMessages.length > 0 && <button className="generation-history-toggle" aria-expanded={false} onClick={() => setGenerationHistoryOpen(true)}><img src="/ui-icons/generation-records.svg" alt="" /><span className="generation-history-label">生成记录</span></button>}
            {generationHistoryOpen && <section className="canvas-generation-history">
-             <header className="canvas-chat-header"><button className="canvas-chat-new" onClick={startNewChat} disabled={!chatMessages.length}>新对话</button><button className="canvas-chat-collapse" aria-label="收起对话" title="收起对话" onClick={() => setGenerationHistoryOpen(false)}><img src="/ui-icons/collapse-history.svg" alt="" /></button></header>
+             <header className="canvas-chat-header"><button className="canvas-chat-new" onClick={startNewChat} disabled={!chatMessages.length}>新对话</button><button className="canvas-chat-collapse" aria-label="收起对话" title="收起对话" onClick={() => setGenerationHistoryOpen(false)}><img src="/ui-icons/window-close.svg" alt="" /></button></header>
              <div className="chat-list" ref={chatListRef}>
                {chatMessages.map((message) => {
                  const linkedNode = message.nodeId ? workflowNodes.find((node) => node.id === message.nodeId) : null
@@ -3209,9 +3247,23 @@ function App() {
            <div className="canvas-generation-controls">
              {assistantReferences.length > 0 && <div className="assistant-reference-strip">{assistantReferences.map((image, index) => <figure key={image.id}><img src={image.dataURL} alt={image.name || `参考图 ${index + 1}`} /><span>{image.canvasElementId ? '画布图片' : `参考图 ${index + 1}`}</span><button type="button" title="移除参考图" onClick={() => removeAssistantReference(image.id)}>×</button></figure>)}</div>}
              <div className="canvas-generation-upload"><button type="button" className="canvas-upload-button" title="上传参考图片" aria-label="上传参考图片" onClick={() => assistantReferenceInput.current?.click()}><img src="/ui-icons/upload-image.svg" alt="" /><small>图片</small></button><input ref={assistantReferenceInput} hidden type="file" multiple accept="image/*" onChange={(event) => { void addAssistantReferences(event.target.files); event.target.value = '' }} /></div>
-             <div className="generation-settings-anchor" ref={generationSettingsRef}>
-               <button type="button" className="generation-settings-pill" aria-expanded={generationSettingsOpen} onClick={() => setGenerationSettingsOpen((value) => !value)}>{assistantGenerationSettings.generationAspect} | {assistantGenerationSettings.generationQuality} | {assistantGenerationSettings.generationCount}张</button>
-               {generationSettingsOpen && <div className="generation-settings-popover"><label>比例<select value={assistantGenerationSettings.generationAspect} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationAspect: event.target.value }))}>{GENERATION_ASPECTS.map((value) => <option key={value}>{value}</option>)}</select></label><label>清晰度<select value={assistantGenerationSettings.generationQuality} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationQuality: event.target.value }))}>{['1K','2K','4K'].map((value) => <option key={value}>{value}</option>)}</select></label><label>张数<select value={assistantGenerationSettings.generationCount} onChange={(event) => setAssistantGenerationSettings((current) => ({ ...current, generationCount: Number(event.target.value) }))}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value} 张</option>)}</select></label></div>}
+             <div className="generation-settings-chips" ref={generationSettingsRef} role="group" aria-label="生图参数">
+               {[
+                 { key: 'generationAspect', label: '比例', value: assistantGenerationSettings.generationAspect, options: GENERATION_ASPECTS },
+                 { key: 'generationQuality', label: '清晰度', value: assistantGenerationSettings.generationQuality, options: ['1K','2K','4K'] },
+                 { key: 'generationCount', label: '张数', value: assistantGenerationSettings.generationCount, options: [1,2,3,4] },
+               ].map((setting) => <div className="generation-setting-control" key={setting.key}>
+                 <button type="button" className="generation-setting-chip" title={`选择${setting.label}`} aria-label={`${setting.label}，当前 ${setting.value}${setting.key === 'generationCount' ? ' 张' : ''}`} aria-haspopup="listbox" aria-expanded={openGenerationSetting === setting.key} onClick={() => setOpenGenerationSetting((current) => current === setting.key ? '' : setting.key)}>
+                   <span>{setting.key === 'generationCount' ? `${setting.value}张` : setting.value}</span><img className="generation-setting-chevron" src="/ui-icons/prompt-arrow-down.svg" alt="" />
+                 </button>
+                 {openGenerationSetting === setting.key && <div className="generation-setting-menu" role="listbox" aria-label={`选择${setting.label}`}>
+                   {setting.options.map((option) => {
+                     const value = setting.key === 'generationCount' ? Number(option) : option
+                     const label = setting.key === 'generationCount' ? `${value}张` : value
+                     return <button type="button" role="option" aria-selected={value === setting.value} className={value === setting.value ? 'selected' : ''} key={value} onClick={() => { setAssistantGenerationSettings((current) => ({ ...current, [setting.key]: value })); setOpenGenerationSetting('') }}>{label}</button>
+                   })}
+                 </div>}
+               </div>)}
              </div>
              <button type="button" className="canvas-generation-send" title="直接生成图片（Ctrl+Enter）" aria-label="直接生成图片" aria-busy={assistantGenerating} onClick={() => void submitCanvasGeneration()} disabled={assistantGenerating || !assistantInput.trim()}><img className="canvas-generation-send-circle" src="/ui-icons/send-circle.svg" alt="" /><img className="canvas-generation-send-arrow" src="/ui-icons/send-up.svg" alt="" /></button>
            </div>
