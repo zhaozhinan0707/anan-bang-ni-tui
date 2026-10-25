@@ -105,15 +105,12 @@ fn nano_payload(input: &GenerationRequest, model: &str) -> Value {
     let mut images = input.reference_images.clone().unwrap_or_default();
     if images.is_empty() { if let Some(image) = input.image_data_url.as_ref().filter(|s| !s.is_empty()) { images.push(image.clone()); } }
     let quality = input.image_size.as_deref().filter(|value| matches!(*value, "1K" | "2K" | "4K"));
-    let output_size = input.requested_size.as_deref().or(input.size.as_deref());
     let mut payload = json!({"model":model,"prompt":input.prompt,"image":images,"aspect_ratio":input.aspect_ratio.as_deref().unwrap_or("16:9"),"picType":"png"});
-    // 迅客旧版接口主要靠模型名区分清晰度；新版同时接受显式分辨率。
-    // 仅在用户选择了明确档位时补充这些字段，避免影响旧版 1K/2K 请求。
+    // 迅客异步生图文档以模型名选择档位，示例另带 resolution。
+    // 不发送该接口未列出的像素 size 和 image_size，避免与模型档位冲突。
     if let Some(value) = quality {
         payload["resolution"] = json!(value);
-        payload["image_size"] = json!(value);
     }
-    if let Some(value) = output_size { payload["size"] = json!(value); }
     payload
 }
 
@@ -123,12 +120,12 @@ mod nano_tests {
     #[test]
     fn documented_request_uses_image_array() {
         let input: GenerationRequest = serde_json::from_value(json!({"prompt":"scene","imageDataUrl":"original","referenceImages":["product-a","product-b"],"aspectRatio":"16:9","imageSize":"4K","requestedSize":"3840x2160"})).unwrap();
-        let body = nano_payload(&input, "nano-banana-pro_2k");
+        let body = nano_payload(&input, "nano-banana-pro_4k");
         assert_eq!(body["image"], json!(["product-a", "product-b"]));
         assert_eq!(body["picType"], "png");
         assert_eq!(body["resolution"], "4K");
-        assert_eq!(body["image_size"], "4K");
-        assert_eq!(body["size"], "3840x2160");
+        assert!(body.get("image_size").is_none());
+        assert!(body.get("size").is_none());
         assert!(body.get("reference_images").is_none());
     }
     #[test]
@@ -218,19 +215,26 @@ pub async fn submit(state: &ImageServiceState, input: GenerationRequest) -> Resu
     if input.prompt.trim().is_empty() { return Err("提示词不能为空".into()); }
     let model = input.model.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or(&c.model).to_string();
     if xunke_nano(&c.base_url, &model) {
-        let endpoint = "https://api.xunkecloud.cn/v1/images/task";
-        let response = auth(client()?.post(endpoint).json(&nano_payload(&input, &model)), &c.api_key).send().await.map_err(|_| "迅客任务提交未取得响应；不要重复提交，请先核对服务端任务记录".to_string())?;
+        let synchronous = c.mode == "xunke_sync";
+        let endpoint = if synchronous { "https://api.xunkecloud.cn/v1/images/generations" } else { "https://api.xunkecloud.cn/v1/images/task" };
+        let response = auth(client()?.post(endpoint).json(&nano_payload(&input, &model)), &c.api_key).send().await.map_err(|error| {
+            let kind = if error.is_timeout() { "等待响应超时" } else if error.is_connect() { "连接失败" } else { "发送或接收失败" };
+            let cause = std::error::Error::source(&error).map(|source| source.to_string()).unwrap_or_else(|| error.to_string());
+            format!("迅客{}接口{kind}（{cause}）。服务端可能已经接单，请按提交时间核对迅客任务记录；确认没有任务后再重新提交", if synchronous { "同步" } else { "异步" })
+        })?;
         let code = response.status();
-        let raw = response.text().await.map_err(|_| format!("迅客任务接口读取失败（HTTP {code}）"))?;
+        let raw = response.text().await.map_err(|error| format!("任务提交状态待核查：迅客已返回 HTTP {code}，但读取响应失败（{error}）。请按提交时间核对迅客任务记录"))?;
         if code.as_u16() == 413 { return Err("迅客任务提交失败（HTTP 413）：参考图请求体过大。请更新应用后重试；新版会自动压缩仅用于上传的参考副本，原图不会被改动。".into()); }
-        let body: Value = serde_json::from_str(&raw).map_err(|_| format!("迅客任务接口返回非 JSON（HTTP {code}）：{}", raw.chars().take(160).collect::<String>()))?;
+        let body: Value = serde_json::from_str(&raw).map_err(|_| format!("任务提交状态待核查：迅客返回非 JSON（HTTP {code}）：{}。请按提交时间核对迅客任务记录", raw.chars().take(160).collect::<String>()))?;
         if !code.is_success() || body.get("code").and_then(Value::as_str).is_some_and(|v| v != "success") {
             let reason = service_error(&body);
             if code.as_u16() == 401 { return Err(format!("迅客任务提交被拒绝（HTTP 401）：{reason}。请在图像服务设置中重新填写有效 API Key，并确认该 Key 有 {model} 模型权限")); }
             return Err(format!("迅客任务提交失败（HTTP {code}）：{reason}"));
         }
         let result = parse_result(&body, &model);
-        if result["taskId"] == "" && result["imageUrl"] == "" { return Err("迅客未返回任务编号或图片；不要自动重复提交".into()); }
+        if (synchronous && result["imageUrl"] == "") || (result["taskId"] == "" && result["imageUrl"] == "") {
+            return Err(if synchronous { "迅客同步接口未返回图片地址；请按提交时间核对迅客任务记录，不要自动重复提交" } else { "任务提交状态待核查：迅客未返回任务编号或图片；请按提交时间核对迅客任务记录，不要自动重复提交" }.into());
+        }
         return Ok(result);
     }
     let count = input.count.unwrap_or(1).clamp(1, 4);

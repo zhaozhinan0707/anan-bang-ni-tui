@@ -8,6 +8,7 @@ mod ai;
 mod image_service;
 mod skills;
 mod assets;
+mod usage_reports;
 
 use serde_json::json;
 use tauri::Manager;
@@ -118,6 +119,8 @@ pub fn run() {
             set_share_path,
             get_sync_status,
             sync_now,
+            publish_generation_usage,
+            get_shared_usage_report,
             list_versions,
             restore_version,
             resolve_conflict,
@@ -128,6 +131,7 @@ pub fn run() {
             ,read_dropped_images
             ,get_ai_config_status
             ,set_ai_config
+            ,get_ai_bridge_token
             ,reverse_image_prompt
             ,take_canvas_import
             ,backup_canvas_project
@@ -188,10 +192,12 @@ fn get_ai_config_status(state: tauri::State<ai::AiState>) -> ai::AiStatus {
 
 /// 允许桌面端设置页或本机桥接写入一份与 Chrome 插件字段一致的配置。
 #[tauri::command]
-fn set_ai_config(config: ai::AiConfig, state: tauri::State<ai::AiState>) -> serde_json::Value {
-    ai::set_config(&state, config);
-    json!({ "ok": true })
+fn set_ai_config(config: ai::AiConfig, state: tauri::State<ai::AiState>) -> Result<serde_json::Value, String> {
+    Ok(json!({ "ok": true, "status": ai::set_desktop_config(&state, config)? }))
 }
+
+#[tauri::command]
+fn get_ai_bridge_token(state: tauri::State<ai::AiState>) -> String { ai::bridge_token(&state) }
 
 #[tauri::command]
 fn get_image_service_status(state: tauri::State<image_service::ImageServiceState>) -> serde_json::Value { image_service::status(&state) }
@@ -264,7 +270,7 @@ fn export_skills(ids: Vec<String>, state: tauri::State<skills::SkillState>, app:
 #[tauri::command]
 async fn run_skill(request: skills::SkillRunRequest, skills_state: tauri::State<'_, skills::SkillState>, ai_state: tauri::State<'_, ai::AiState>) -> Result<skills::SkillRunResult, String> { skills::run(&skills_state, &ai_state, request).await }
 
-/// 画布选图后直接调用当前已同步的视觉模型。
+/// 普通反推始终使用软件设置中的提示词模板；Skill 由独立的 run_skill 命令执行。
 #[tauri::command]
 async fn reverse_image_prompt(image_data_url: String, template_id: Option<String>, original_prompt: Option<String>, instruction: Option<String>, state: tauri::State<'_, ai::AiState>) -> Result<ai::ReversePromptResult, String> {
     ai::reverse(&state, image_data_url, template_id, original_prompt, instruction).await
@@ -752,6 +758,16 @@ fn get_sync_status(state: tauri::State<sync::ShareState>) -> serde_json::Value {
 fn sync_now(state: tauri::State<sync::ShareState>) -> serde_json::Value {
     let (pushed, pulled, online) = sync::sync_once(&state);
     json!({ "pushed": pushed, "pulled": pulled, "online": online })
+}
+
+#[tauri::command]
+fn publish_generation_usage(events: Vec<usage_reports::UsageEvent>, state: tauri::State<sync::ShareState>) -> Result<serde_json::Value, String> {
+    usage_reports::publish(&state, events)
+}
+
+#[tauri::command]
+fn get_shared_usage_report(state: tauri::State<sync::ShareState>) -> Result<serde_json::Value, String> {
+    usage_reports::report(&state)
 }
 
 /* ── 历史版本与冲突（V1.1 F6.9） ── */

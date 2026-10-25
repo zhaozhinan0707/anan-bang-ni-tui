@@ -1,7 +1,7 @@
 //! 本机 AI 配置桥接与图像反推。
 //!
-//! Chrome 扩展将它自己的设置 POST 到 127.0.0.1；桌面端只在本机持久化该设置，
-//! 再由 Rust 发起模型请求，避免在画布前端保存第二套密钥。
+//! 桌面端持久化推理模型配置；旧版扩展设置可在首次使用时迁入。
+//! 扩展经连接码读取非敏感设置，模型请求由本机桥接代发，不回传 API Key。
 
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, io::{Read, Write}, net::TcpListener, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
@@ -30,6 +30,8 @@ pub struct AiConfig {
     #[serde(default)]
     pub prompt_templates: Vec<PromptTemplate>,
     pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub managed_by_desktop: bool,
 }
 
 #[derive(Clone)]
@@ -37,6 +39,7 @@ pub struct AiState {
     pub config: Arc<Mutex<AiConfig>>,
     pub canvas_imports: Arc<Mutex<VecDeque<CanvasImport>>>,
     pub path: PathBuf,
+    pub bridge_token: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,11 +70,16 @@ pub struct CanvasImport {
 #[serde(rename_all = "camelCase")]
 pub struct AiStatus {
     pub configured: bool,
+    pub enabled: bool,
+    pub has_api_key: bool,
     pub model: String,
     pub api_base: String,
+    pub custom_model: String,
     pub updated_at: Option<i64>,
     pub prompt_template_id: String,
+    pub prompt_template: String,
     pub prompt_templates: Vec<PromptTemplate>,
+    pub managed_by_desktop: bool,
 }
 
 #[derive(Serialize)]
@@ -111,11 +119,17 @@ fn built_in_templates() -> Vec<PromptTemplate> {
 
 pub fn init(data_dir: PathBuf) -> AiState {
     let path = data_dir.join("ai-config.json");
+    let token_path = data_dir.join("ai-bridge-token.txt");
+    let bridge_token = std::fs::read_to_string(&token_path).ok().filter(|value| !value.trim().is_empty()).unwrap_or_else(|| {
+        let value = uuid::Uuid::new_v4().to_string();
+        let _ = std::fs::write(&token_path, &value);
+        value
+    });
     let config = std::fs::read_to_string(&path)
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
-    AiState { config: Arc::new(Mutex::new(config)), canvas_imports: Arc::new(Mutex::new(VecDeque::new())), path }
+    AiState { config: Arc::new(Mutex::new(config)), canvas_imports: Arc::new(Mutex::new(VecDeque::new())), path, bridge_token }
 }
 
 pub fn enqueue_canvas_import(state: &AiState, item: CanvasImport) -> Result<(), String> {
@@ -136,35 +150,56 @@ pub fn take_canvas_import(state: &AiState) -> Option<CanvasImport> {
     state.canvas_imports.lock().ok()?.pop_front()
 }
 
-fn save(state: &AiState, config: &AiConfig) {
-    if let Ok(raw) = serde_json::to_vec(config) {
-        let tmp = state.path.with_extension("tmp");
-        if std::fs::write(&tmp, raw).is_ok() {
-            let _ = std::fs::rename(&tmp, &state.path);
-        }
+fn save(state: &AiState, config: &AiConfig) -> Result<(), String> {
+    let raw = serde_json::to_vec(config).map_err(|error| error.to_string())?;
+    let tmp = state.path.with_extension("tmp");
+    std::fs::write(&tmp, raw).map_err(|error| format!("写入模型设置失败：{error}"))?;
+    if std::fs::rename(&tmp, &state.path).is_err() {
+        std::fs::copy(&tmp, &state.path).map_err(|error| format!("保存模型设置失败：{error}"))?;
+        let _ = std::fs::remove_file(&tmp);
     }
+    Ok(())
 }
 
-pub fn set_config(state: &AiState, mut config: AiConfig) {
+pub fn set_config(state: &AiState, mut config: AiConfig) -> Result<(), String> {
     config.api_key = config.api_key.trim().to_string();
     config.api_base = config.api_base.trim().trim_end_matches('/').to_string();
     config.model = config.model.trim().to_string();
     config.custom_model = config.custom_model.trim().to_string();
     config.prompt_template = config.prompt_template.trim().to_string();
     config.updated_at = Some(chrono::Utc::now().timestamp_millis());
-    if let Ok(mut current) = state.config.lock() { *current = config.clone(); }
-    save(state, &config);
+    save(state, &config)?;
+    let mut current = state.config.lock().map_err(|_| "模型配置不可用")?;
+    *current = config;
+    Ok(())
 }
+
+pub fn set_desktop_config(state: &AiState, mut config: AiConfig) -> Result<AiStatus, String> {
+    if let Ok(current) = state.config.lock() {
+        if config.api_key.trim().is_empty() { config.api_key = current.api_key.clone(); }
+    }
+    if config.prompt_templates.is_empty() { config.prompt_templates = built_in_templates(); }
+    config.managed_by_desktop = true;
+    set_config(state, config)?;
+    Ok(status(state))
+}
+
+pub fn bridge_token(state: &AiState) -> String { state.bridge_token.clone() }
 
 pub fn status(state: &AiState) -> AiStatus {
     let config = state.config.lock().map(|x| x.clone()).unwrap_or_default();
     AiStatus {
         configured: !config.model.is_empty() && (!config.api_key.is_empty() || is_local(&config.api_base)),
+        enabled: config.enabled.unwrap_or(true),
+        has_api_key: !config.api_key.is_empty(),
         model: config.model,
         api_base: config.api_base,
+        custom_model: config.custom_model,
         updated_at: config.updated_at,
         prompt_template_id: config.prompt_template_id,
+        prompt_template: config.prompt_template,
         prompt_templates: if config.prompt_templates.is_empty() { built_in_templates() } else { config.prompt_templates },
+        managed_by_desktop: config.managed_by_desktop,
     }
 }
 
@@ -176,7 +211,8 @@ pub fn start_bridge(state: AiState) {
             return;
         };
         for stream in listener.incoming().flatten() {
-            handle_http(stream, &state);
+            let state = state.clone();
+            std::thread::spawn(move || handle_http(stream, &state));
         }
     });
 }
@@ -184,11 +220,42 @@ pub fn start_bridge(state: AiState) {
 fn respond(stream: &mut std::net::TcpStream, status: &str, body: &str, origin: Option<&str>) {
     let cors = origin.filter(|value| value.starts_with("chrome-extension://")).map(|value| format!("Access-Control-Allow-Origin: {value}\r\n")).unwrap_or_default();
     let headers = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\n{cors}Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\n{cors}Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-Bridge-Token\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(headers.as_bytes());
     let _ = stream.write_all(body.as_bytes());
+}
+
+fn proxy_model(state: &AiState, body: &str) -> Result<(String, String), String> {
+    let request: serde_json::Value = serde_json::from_str(body).map_err(|_| "请求格式错误")?;
+    let endpoint = request.get("endpoint").and_then(serde_json::Value::as_str).ok_or("缺少接口路径")?;
+    let allowed = matches!(endpoint, "chat/completions" | "messages") || endpoint.strip_prefix("models/").is_some_and(|value| {
+        value.strip_suffix(":generateContent").is_some_and(|model| !model.is_empty() && model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+    });
+    if !allowed { return Err("不支持的模型接口路径".into()); }
+    let mut payload = request.get("payload").cloned().ok_or("缺少请求内容")?;
+    let config = state.config.lock().map_err(|_| "模型配置不可用")?.clone();
+    if config.api_key.is_empty() && !is_local(&config.api_base) { return Err("请先在桌面端配置推理模型密钥".into()); }
+    let base = if config.api_base.is_empty() { default_base(&config.model).to_string() } else if config.api_base.eq_ignore_ascii_case("local") { "http://127.0.0.1:8080/v1".into() } else { config.api_base.trim_end_matches('/').to_string() };
+    if base.is_empty() { return Err("请先在桌面端填写推理模型接口地址".into()); }
+    let configured_model = real_model(&config);
+    if let Some(object) = payload.as_object_mut() {
+        if object.contains_key("model") { object.insert("model".into(), serde_json::json!(configured_model.clone())); }
+    }
+    let endpoint = if endpoint.starts_with("models/") { format!("models/{configured_model}:generateContent") } else { endpoint.to_string() };
+    let mut target = reqwest::Url::parse(&format!("{base}/{endpoint}")).map_err(|_| "模型接口地址无效")?;
+    if endpoint.starts_with("models/") { target.query_pairs_mut().append_pair("key", &config.api_key); }
+    tauri::async_runtime::block_on(async {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(180)).build().map_err(|error| error.to_string())?;
+        let mut outgoing = client.post(target).json(&payload);
+        if endpoint == "messages" { outgoing = outgoing.header("x-api-key", &config.api_key).header("anthropic-version", "2023-06-01"); }
+        else if endpoint == "chat/completions" { outgoing = outgoing.bearer_auth(if config.api_key.is_empty() { "local" } else { &config.api_key }); }
+        let response = outgoing.send().await.map_err(|error| format!("模型请求失败：{error}"))?;
+        let status = format!("{} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Response"));
+        let text = response.text().await.map_err(|error| format!("读取模型响应失败：{error}"))?;
+        Ok((status, text))
+    })
 }
 
 fn handle_http(mut stream: std::net::TcpStream, state: &AiState) {
@@ -226,13 +293,32 @@ fn handle_http(mut stream: std::net::TcpStream, state: &AiState) {
     let body = parts.next().unwrap_or_default();
     let first = head.lines().next().unwrap_or_default();
     let origin = head.lines().find_map(|line| line.strip_prefix("Origin: ").or_else(|| line.strip_prefix("origin: ")));
+    let token = head.lines().find_map(|line| line.split_once(':').and_then(|(name, value)| name.eq_ignore_ascii_case("X-Bridge-Token").then(|| value.trim())));
     if origin.is_some_and(|value| !value.starts_with("chrome-extension://")) { return respond(&mut stream, "403 Forbidden", r#"{"ok":false}"#, None); }
     if first.starts_with("OPTIONS ") { return respond(&mut stream, "204 No Content", "", origin); }
     if first.starts_with("GET /api/bridge-status") { return respond(&mut stream, "200 OK", r#"{"ok":true,"protocolVersion":2,"product":"阿男帮你推","target":"当前活动项目"}"#, origin); }
-    if first.starts_with("GET /api/ai-config") { return respond(&mut stream, "200 OK", &serde_json::to_string(&status(state)).unwrap_or_else(|_| "{}".into()), origin); }
+    if first.starts_with("GET /api/ai-config") {
+        if token != Some(state.bridge_token.as_str()) {
+            return respond(&mut stream, "403 Forbidden", r#"{"error":"请先连接桌面端"}"#, origin);
+        }
+        return respond(&mut stream, "200 OK", &serde_json::to_string(&status(state)).unwrap_or_else(|_| "{}".into()), origin);
+    }
+    if first.starts_with("POST /api/model-proxy") {
+        if token != Some(state.bridge_token.as_str()) { return respond(&mut stream, "403 Forbidden", r#"{"error":"插件尚未连接桌面端"}"#, origin); }
+        return match proxy_model(state, body) {
+            Ok((status, value)) => respond(&mut stream, &status, &value, origin),
+            Err(error) => respond(&mut stream, "400 Bad Request", &serde_json::json!({"error":error}).to_string(), origin),
+        };
+    }
     if first.starts_with("POST /api/ai-config") {
+        if state.config.lock().map(|value| value.managed_by_desktop).unwrap_or(false) {
+            return respond(&mut stream, "409 Conflict", r#"{"ok":false,"error":"请在桌面端修改推理模型与提示词模板"}"#, origin);
+        }
         match serde_json::from_str::<AiConfig>(body) {
-            Ok(config) => { set_config(state, config); return respond(&mut stream, "200 OK", r#"{"ok":true}"#, origin); }
+            Ok(config) => return match set_config(state, config) {
+                Ok(()) => respond(&mut stream, "200 OK", r#"{"ok":true}"#, origin),
+                Err(error) => respond(&mut stream, "500 Internal Server Error", &serde_json::json!({"ok":false,"error":error}).to_string(), origin),
+            },
             Err(_) => return respond(&mut stream, "400 Bad Request", r#"{"ok":false,"error":"配置格式错误"}"#, origin),
         }
     }
@@ -338,7 +424,7 @@ fn strip_data_url(data_url: &str) -> Result<(String, String), String> {
 
 fn reverse_system_prompt(template: &str) -> String {
     // 与 Chrome 插件的 SYSTEM_PROMPT_BASE 保持同一套视觉分析维度。
-    // 模板本身（包括自定义字数、风格与输出要求）来自插件同步，放在末尾以获得最高优先级。
+    // 模板本身（包括自定义字数、风格与输出要求）来自软件设置，放在末尾以获得最高优先级。
     let base = r#"你是一位专业的 AI 图像分析师和提示词工程师，精通从图片中提取视觉特征并生成高质量的 AI 绘图提示词。你的分析结果将直接用于 Midjourney、Stable Diffusion、DALL-E 等 AI 绘图工具。
 
 ## 核心任务
@@ -358,7 +444,7 @@ fn reverse_system_prompt(template: &str) -> String {
 必须准确反映图片实际内容，不臆测不可见细节；按视觉显著性排序，优先说明画面为什么呈现当前构图和视觉效果。"#;
     let fallback = "请基于参考图片写一段可直接用于图像生成的中文提示词。准确描述主体、构图、镜头、光线、色彩、材质、场景和关键空间关系；不要臆测不可见内容。末尾加入针对性的画面约束。";
     format!(
-        "{base}\n\n## 当前插件同步模板（最高优先级）\n{}\n\n严格执行以上模板的字数、结构和内容要求。输出前自行检查是否达到模板要求；不得擅自缩写或提前结束。不要标题、分析过程、解释、项目符号、Markdown 或 JSON，只输出模板要求的最终完整中文提示词。",
+        "{base}\n\n## 当前所选提示词模板（最高优先级）\n{}\n\n严格执行以上模板的字数、结构和内容要求。输出前自行检查是否达到模板要求；不得擅自缩写或提前结束。不要标题、分析过程、解释、项目符号、Markdown 或 JSON，只输出模板要求的最终完整中文提示词。",
         if template.trim().is_empty() { fallback } else { template }
     )
 }
@@ -388,13 +474,13 @@ fn modify_system_prompt(template: &str) -> String {
 
 pub async fn reverse(state: &AiState, image_data_url: String, template_id: Option<String>, original_prompt: Option<String>, instruction: Option<String>) -> Result<ReversePromptResult, String> {
     let config = state.config.lock().map(|x| x.clone()).unwrap_or_default();
-    if config.model.is_empty() { return Err("尚未同步模型配置。请打开 Chrome 的提示词反推插件设置一次。".into()); }
-    if !supports_vision(&config.model) { return Err(format!("模型 {} 不支持图片反推，请在插件设置中切换到 GLM-4V 或其他视觉模型。", config.model)); }
+    if config.model.is_empty() { return Err("尚未配置推理模型，请在软件设置中填写。".into()); }
+    if !supports_vision(&config.model) { return Err(format!("模型 {} 不支持图片反推，请在软件设置中切换到视觉模型。", config.model)); }
     let model = real_model(&config);
-    if model.is_empty() { return Err("自定义模型名称为空，请在插件设置中补充。".into()); }
+    if model.is_empty() { return Err("自定义模型名称为空，请在软件设置中补充。".into()); }
     let base = if config.api_base.is_empty() { default_base(&config.model).to_string() } else if config.api_base.eq_ignore_ascii_case("local") { "http://127.0.0.1:8080/v1".into() } else { config.api_base.trim_end_matches('/').to_string() };
-    if base.is_empty() { return Err("未配置 API Base URL。请在插件设置中保存一次配置。".into()); }
-    if config.api_key.is_empty() && !is_local(&base) { return Err("未配置 API Key。请在提示词反推插件设置中填写后保存。".into()); }
+    if base.is_empty() { return Err("未配置 API Base URL。请在软件设置中填写后保存。".into()); }
+    if config.api_key.is_empty() && !is_local(&base) { return Err("未配置 API Key。请在软件设置中填写后保存。".into()); }
     let (mime, b64) = strip_data_url(&image_data_url)?;
     let templates = if config.prompt_templates.is_empty() { built_in_templates() } else { config.prompt_templates.clone() };
     let selected_template = template_id.as_deref().and_then(|id| templates.iter().find(|item| item.id == id));

@@ -10,6 +10,6 @@ export function parseSkillMarkdown(name, raw) {
   const instruction = match[2].trim()
   const skillName = metadata.name?.trim()
   if (!skillName || skillName.length > 80) throw new Error('SKILL.md 的 name 不能为空或超过 80 字')
-  if (!instruction || instruction.length > 12_000) throw new Error('SKILL.md 正文不能为空或超过 12000 字')
+  if (!instruction || instruction.length > 20_000) throw new Error('SKILL.md 正文不能为空或超过 20000 字')
   return { name: skillName, description: metadata.description || '', instruction, source: `markdown:${name}` }
 }

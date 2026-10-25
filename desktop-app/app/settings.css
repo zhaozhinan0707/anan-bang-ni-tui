@@ -40,6 +40,69 @@
   margin: 0 -6px 13px;
 }
 
+.image-service-settings-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.image-service-settings-tabs button {
+  height: 27px;
+  padding: 0 14px;
+  border: 1px solid #e2e2e2;
+  border-radius: 7px;
+  background: #fff;
+  color: #333;
+  font: 11px inherit;
+  cursor: pointer;
+}
+
+.image-service-settings-tabs button.active {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.image-service-settings-dialog.stats-view {
+  height: min(570px, calc((100vh - 32px) / 1.3));
+}
+
+.image-service-settings-dialog.ai-view { height: min(560px, calc((100vh - 32px) / 1.3)); }
+.ai-settings-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 16px; padding: 8px 4px 2px; color: #171717; }
+.ai-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ai-settings-heading h2 { margin: 0 0 5px; font-size: 18px; font-weight: 650; }
+.ai-settings-heading p, .ai-settings-pair p { margin: 0; color: #777; font-size: 11px; line-height: 1.5; }
+.ai-settings-heading > span { padding: 5px 10px; border: 1px solid #e5e5e5; border-radius: 20px; color: #555; font-size: 11px; white-space: nowrap; }
+.ai-settings-form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 16px; }
+.ai-settings-form > label, .ai-template-editor > label { display: flex; flex-direction: column; gap: 7px; font-size: 11px; }
+.ai-settings-form input, .ai-settings-form select, .ai-template-editor input, .ai-template-editor textarea, .ai-settings-pair input { box-sizing: border-box; width: 100%; min-height: 34px; padding: 7px 10px; border: 1px solid #dedede; border-radius: 8px; background: #fff; color: #171717; font: inherit; }
+.ai-settings-form input:focus, .ai-settings-form select:focus, .ai-template-editor input:focus, .ai-template-editor textarea:focus { outline: 1px solid #111; }
+.ai-settings-pair { display: grid; grid-template-columns: minmax(0, 1fr) 240px auto; align-items: center; gap: 12px; margin-top: 8px; padding: 15px; border: 1px solid #e5e5e5; border-radius: 12px; }
+.ai-settings-pair b { display: block; margin-bottom: 4px; font-size: 12px; }
+.ai-settings-pair input { font-family: monospace; font-size: 11px; }
+.ai-settings-pair button, .ai-settings-panel footer button, .ai-template-editor button { padding: 8px 14px; border: 1px solid #111; border-radius: 8px; background: #111; color: #fff; cursor: pointer; font-size: 11px; }
+.ai-settings-panel footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: auto; padding-top: 12px; border-top: 1px solid #e8e8e8; }
+.ai-settings-panel footer span { color: #666; font-size: 11px; }
+.ai-settings-panel footer button:disabled { opacity: .45; }
+.ai-template-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; flex: 1; min-height: 0; }
+.ai-template-list { display: flex; flex-direction: column; gap: 5px; overflow: auto; padding-right: 4px; }
+.ai-template-list button { min-height: 34px; padding: 7px 10px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; color: #222; text-align: left; cursor: pointer; font-size: 11px; }
+.ai-template-list button.active { border-color: #111; background: #111; color: #fff; }
+.ai-template-editor { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
+.ai-template-editor > label:nth-child(2) { flex: 1; min-height: 0; }
+.ai-template-editor textarea { flex: 1; min-height: 120px; resize: vertical; line-height: 1.6; }
+.ai-template-editor > div { display: flex; align-items: center; justify-content: space-between; }
+.ai-template-editor > div label { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.ai-template-editor > div input[type="radio"] { width: 14px; min-height: 14px; accent-color: #111; }
+@media (max-width: 720px) { .ai-settings-form, .ai-template-layout { grid-template-columns: 1fr; } .ai-settings-pair { grid-template-columns: 1fr; } .ai-template-list { max-height: 130px; } }
+
+.image-service-settings-dialog.stats-view .local-stats-panel {
+  flex: 1;
+}
+
 .image-service-settings-title {
   display: flex;
   align-items: center;

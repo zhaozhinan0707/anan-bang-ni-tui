@@ -76,6 +76,7 @@ fn content_changed(old: &SkillDefinition, new: &SkillDefinition) -> bool {
 }
 
 fn defaults() -> Vec<SkillDefinition> { vec![
+    built_in("reverse-image-prompt-glm4v", "提示词反推（自动识别）", "使用你训练的反推规则分析图片，自动区分摄影、产品渲染与活动海报，并生成可直接使用的中文提示词。", "视觉分析", &["image"], include_str!("../resources/skills/reverse-image-prompt-glm4v.md").trim(), "prompt", &["反推", "自动识别", "GLM-4V"]),
     built_in("image-composition", "图片反推与构图拆解", "拆解画面主体、构图、镜头、光线与可复用提示词。", "视觉分析", &["image"], "根据当前图片，先提炼主体、构图、镜头、光影、色彩和材质，再输出一段可直接用于生图的完整中文提示词。", "prompt", &["反推", "构图", "摄影"]),
     built_in("product-scene", "产品白底图场景融合", "把白底产品图与场景提示词组合为稳定的生图方案。", "产品生图", &["image", "text"], "以当前产品参考图为唯一产品外观依据，结合当前提示词设计真实商业场景。严格保持产品结构、比例、材质和配色，输出完整中文生图提示词。", "prompt", &["白底图", "融合", "产品一致性"]),
     built_in("product-consistency", "产品一致性检查", "检查产品图与提示词是否可能造成结构漂移。", "产品生图", &["image", "text"], "检查当前产品参考图和提示词中的结构、颜色、材质、部件和镜头描述是否一致。列出高风险冲突，并给出一版可直接替换的修正提示词。", "analysis", &["一致性", "修复", "产品"]),
@@ -88,7 +89,10 @@ fn defaults() -> Vec<SkillDefinition> { vec![
 
 pub fn init(data_dir: PathBuf) -> SkillState {
     let path = data_dir.join("skills.json");
-    let items = std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_else(defaults);
+    let mut items = std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_else(defaults);
+    for builtin in defaults() {
+        if !items.iter().any(|item| item.id == builtin.id) { items.push(builtin); }
+    }
     let state = SkillState { items: Arc::new(Mutex::new(items)), path };
     if let Err(error) = persist(&state) { eprintln!("初始化 Skill 库保存失败：{error}"); }
     state
@@ -121,7 +125,7 @@ pub fn list(state: &SkillState) -> Vec<SkillDefinition> { let mut items = state.
 pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefinition, String> {
     input.name = input.name.trim().to_string(); input.instruction = input.instruction.trim().to_string();
     if input.name.is_empty() || input.name.chars().count() > 80 { return Err("Skill 名称不能为空且不能超过 80 字".into()); }
-    if input.instruction.is_empty() || input.instruction.chars().count() > 12_000 { return Err("Skill 执行指令不能为空且不能超过 12000 字".into()); }
+    if input.instruction.is_empty() || input.instruction.chars().count() > 20_000 { return Err("Skill 执行指令不能为空且不能超过 20000 字".into()); }
     input.id = if input.id.trim().is_empty() { uuid::Uuid::new_v4().to_string() } else { input.id.trim().to_string() };
     input.category = if input.category.trim().is_empty() { "自建 Skill".into() } else { input.category.trim().to_string() };
     input.output_type = if input.output_type.trim().is_empty() { "prompt".into() } else { input.output_type.trim().to_string() };
@@ -160,6 +164,7 @@ pub fn save(state: &SkillState, mut input: SkillDefinition) -> Result<SkillDefin
 pub fn remove(state: &SkillState, id: &str) -> Result<(), String> {
     let mut current = state.items.lock().map_err(|_| "Skill 库暂时不可用")?;
     let mut items = current.clone();
+    if items.iter().any(|item| item.id == id && item.built_in) { return Err("内置 Skill 不能删除".into()); }
     let before = items.len();
     items.retain(|item| item.id != id);
     if before == items.len() { return Err("未找到要删除的 Skill".into()); }

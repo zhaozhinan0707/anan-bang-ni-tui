@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { check } from '@tauri-apps/plugin-updater'
+import { version as APP_VERSION } from '../package.json'
 import { Excalidraw, convertToExcalidrawElements } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 import './style.css'
@@ -16,6 +17,8 @@ import settingsSwitchIcon from './settings-switch.svg'
 import { extractProjectDocument, selectDocumentExcerpts, documentContext } from './documents.js'
 import { parseSkillMarkdown } from './skill-import.js'
 import { isMultilinePromptPaste, normalizePastedPrompt, wrapPastedPromptForCanvas } from './paste-prompt.js'
+import { currentLocalAccount, logoutLocalAccount, markSharedGenerationEventsSynced, pendingSharedGenerationEvents, saveLocalGenerationEvent } from './local-account.js'
+import { LocalAccountGate, PersonalStats } from './local-account-ui.jsx'
 
 const LEGACY_KEY = 'promptVault.excalidraw.v1'
 const PROJECTS_KEY = 'promptVault.projects.v1'
@@ -65,7 +68,7 @@ const GENERATION_DEFAULTS = {
   generationBacksideReference: null,
   generationActionLock: true,
 }
-const textOnlyDefaultForNode = (node) => node?.generationTextOnly ?? Boolean(node?.kind === 'prompt' && node.sourceElementId && !['manual', 'agent', 'image-angle'].includes(node.templateId))
+const textOnlyDefaultForNode = (node) => node?.generationTextOnly ?? Boolean((node?.kind === 'prompt' && node.sourceElementId && !['manual', 'agent', 'image-angle'].includes(node.templateId)) || (node?.kind === 'skill' && node.skillOutputType === 'prompt'))
 const MULTI_ANGLE_DEFAULTS = {
   generationMultiAngleEnabled: false,
   generationAngleMode: 'camera',
@@ -528,18 +531,40 @@ const blenderPromptForNode = (node, changes = {}) => {
 const workflowNodeDimensions = (node) => {
   const referenceCount = Math.min(8, (node.referenceImages || []).length || (node.referenceImage ? 1 : 0))
   const extraReferenceRows = Math.max(0, Math.ceil(referenceCount / 5) - 1) * 92
-  if (node.kind === 'prompt') return { width: 523, height: node.collapsed ? 48 : 374 }
+  if (node.kind === 'prompt') return { width: 523, height: node.collapsed ? 48 : 197 + Math.max(70, Number(node.promptTextHeight) || 177) }
   if (node.kind === 'compose') return { width: 523, height: node.collapsed ? 42 : Math.max(374, Number(node.composeHeight) || 374) }
-  if (node.kind === 'modify') return { width: 523, height: node.collapsed ? 48 : 698 + extraReferenceRows }
-  return { width: node.width, height: node.collapsed ? 48 : node.height }
+  if (node.kind === 'modify') {
+    const extraTextHeight = Math.max(0, (Number(node.modifyOriginalHeight) || 80) - 80) + Math.max(0, (Number(node.modifyInstructionHeight) || 60) - 60) + Math.max(0, (Number(node.modifyResultHeight) || 163) - 163)
+    return { width: 523, height: node.collapsed ? 48 : 698 + extraReferenceRows + extraTextHeight }
+  }
+  const baseHeight = Number(node.height)
+  const outputHeightDelta = Math.max(0, (Number(node.outputTextHeight) || 160) - 160)
+  return { width: node.width, height: node.collapsed ? 48 : Number.isFinite(baseHeight) ? baseHeight + outputHeightDelta : node.height }
 }
 
-function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selectedTemplateId, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onModifyAndGenerate, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
+function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, skills = [], projectId, selectedTemplateId, selectedIds, onSelect, onBeginMove, onMoveMany, onRegenerate, onModify, onModifyAndGenerate, onGenerate, onCancelGeneration, onUpdate, onAttachImage, onRemoveImage, onDelete, onDisconnect }) {
   const drag = useRef(null)
   const composeResize = useRef(null)
   const [composeResizePreview, setComposeResizePreview] = useState(null)
+  const textareaResize = useRef(null)
+  const textareaResizeFrame = useRef(0)
+  const pendingTextareaResizePreview = useRef(null)
+  const [textareaResizePreview, setTextareaResizePreview] = useState(null)
+  const queueTextareaResizePreview = (preview) => {
+    pendingTextareaResizePreview.current = preview
+    if (textareaResizeFrame.current) return
+    textareaResizeFrame.current = requestAnimationFrame(() => {
+      textareaResizeFrame.current = 0
+      const latestPreview = pendingTextareaResizePreview.current
+      pendingTextareaResizePreview.current = null
+      if (latestPreview) setTextareaResizePreview(latestPreview)
+    })
+  }
   const [openGenerationSettings, setOpenGenerationSettings] = useState('')
-  const nodeBox = (node) => ({ ...node, ...workflowNodeDimensions(node), ...(composeResizePreview?.id === node.id ? { height: composeResizePreview.height } : {}) })
+  const nodeBox = (node) => {
+    const resizing = textareaResizePreview?.id === node.id ? { ...node, [textareaResizePreview.fieldKey]: textareaResizePreview.height } : node
+    return { ...resizing, ...workflowNodeDimensions(resizing), ...(composeResizePreview?.id === node.id ? { height: composeResizePreview.height } : {}) }
+  }
   const generationGuardUntil = useRef(0)
   const zoom = viewport.zoom?.value || viewport.zoom || 1
   useEffect(() => {
@@ -590,6 +615,74 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
     setComposeResizePreview(null)
     onUpdate(id, { composeHeight: Math.round(height) })
   }
+  const textareaHeight = (node, fieldKey, defaultHeight) => {
+    if (textareaResizePreview?.id === node.id && textareaResizePreview.fieldKey === fieldKey) return textareaResizePreview.height
+    return Math.max(defaultHeight, Number(node[fieldKey]) || defaultHeight)
+  }
+  const updatePromptResizeLayout = (current, height) => {
+    const resizedNode = { ...current.node, promptTextHeight: height }
+    const resizedBox = { ...resizedNode, ...workflowNodeDimensions(resizedNode) }
+    const cardHeight = resizedBox.height
+    current.promptBody?.style.setProperty('--prompt-text-height', `${height}px`)
+    if (current.promptCard) {
+      current.promptCard.style.height = `${cardHeight}px`
+      current.promptCard.style.minHeight = `${cardHeight}px`
+    }
+    for (const group of current.links || []) {
+      const targetId = group.dataset.targetId
+      const link = targetId
+        ? (elementById.has(targetId) ? connector(resizedBox, elementById.get(targetId)) : null)
+        : (() => {
+            const sourceId = group.dataset.sourceId
+            const sourceNode = nodes.find((item) => item.id === sourceId)
+            const source = sourceNode ? nodeBox(sourceNode) : elementById.get(sourceId)
+            return source ? connector(source, resizedBox) : null
+          })()
+      if (!link) continue
+      group.querySelector('path')?.setAttribute('d', link.path)
+      const ports = group.querySelectorAll('.workflow-port')
+      if (ports[0]) { ports[0].setAttribute('cx', link.from.x); ports[0].setAttribute('cy', link.from.y) }
+      if (ports[1]) { ports[1].setAttribute('cx', link.to.x); ports[1].setAttribute('cy', link.to.y) }
+      const control = group.querySelector('.workflow-link-control')
+      if (control) {
+        const circle = control.querySelector('circle')
+        const label = control.querySelector('text')
+        if (circle) { circle.setAttribute('cx', link.middle.x); circle.setAttribute('cy', link.middle.y) }
+        if (label) { label.setAttribute('x', link.middle.x); label.setAttribute('y', link.middle.y + 4) }
+      }
+    }
+  }
+  const startTextareaResize = (event, node, fieldKey, defaultHeight, minHeight = defaultHeight, maxHeight = 1400) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const startHeight = Math.max(minHeight, Number(node[fieldKey]) || defaultHeight)
+    if (textareaResizeFrame.current) cancelAnimationFrame(textareaResizeFrame.current)
+    textareaResizeFrame.current = 0
+    pendingTextareaResizePreview.current = null
+    const promptCard = fieldKey === 'promptTextHeight' ? event.currentTarget.closest('.workflow-node.prompt') : null
+    textareaResize.current = { id: node.id, node, fieldKey, startY: event.clientY, startHeight, height: startHeight, zoom, minHeight, maxHeight, promptCard, promptBody: promptCard?.querySelector('.prompt-node-body'), links: promptCard ? Array.from(layerRef.current?.querySelectorAll('.workflow-link[data-node-id]') || []).filter((group) => group.dataset.nodeId === node.id) : [] }
+    if (fieldKey !== 'promptTextHeight') setTextareaResizePreview({ id: node.id, fieldKey, height: startHeight })
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const moveTextareaResize = (event) => {
+    if (!textareaResize.current) return
+    const current = textareaResize.current
+    const height = Math.max(current.minHeight, Math.min(current.maxHeight, current.startHeight + (event.clientY - current.startY) / current.zoom))
+    current.height = height
+    if (current.fieldKey === 'promptTextHeight') updatePromptResizeLayout(current, height)
+    else queueTextareaResizePreview({ id: current.id, fieldKey: current.fieldKey, height })
+  }
+  const stopTextareaResize = () => {
+    if (!textareaResize.current) return
+    const { id, fieldKey, height } = textareaResize.current
+    textareaResize.current = null
+    if (textareaResizeFrame.current) cancelAnimationFrame(textareaResizeFrame.current)
+    textareaResizeFrame.current = 0
+    pendingTextareaResizePreview.current = null
+    if (fieldKey !== 'promptTextHeight') setTextareaResizePreview(null)
+    onUpdate(id, { [fieldKey]: Math.round(height) })
+  }
+  const renderTextareaResizeHandle = (node, fieldKey, defaultHeight, minHeight = defaultHeight, maxHeight = 1400, className = '') => <button type="button" className={'workflow-textarea-resize ' + className} aria-label="拖动以拉高文本框" title="拖动以拉高文本框" onPointerDown={(event) => startTextareaResize(event, node, fieldKey, defaultHeight, minHeight, maxHeight)} onPointerMove={moveTextareaResize} onPointerUp={stopTextareaResize} onPointerCancel={stopTextareaResize}><img src="/ui-icons/textarea-resize.svg" alt="" draggable="false" /></button>
   const changeGenerationSetting = (event, node, key, value) => {
     event.stopPropagation()
     generationGuardUntil.current = Date.now() + 650
@@ -627,6 +720,21 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
   }
   const elementById = new Map(elements.filter((element) => !element.isDeleted).map((element) => [element.id, element]))
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const reverseSkills = skills.filter((skill) => skill.outputType === 'prompt' && (!skill.scopeProjectId || skill.scopeProjectId === projectId))
+  const reverseChoiceValue = (node) => {
+    if (node.reverseMethodType === 'skill' && node.reverseSkillId) return `skill:${node.reverseSkillId}`
+    if (!node.reverseMethodType && node.templateId === 'reverse-image-prompt-glm4v') return 'skill:reverse-image-prompt-glm4v'
+    return `template:${node.templateId || selectedTemplateId || templates[0]?.id || ''}`
+  }
+  const chooseReverseMethod = (node, value) => {
+    if (value.startsWith('skill:')) {
+      const skillId = value.slice(6), skill = reverseSkills.find((item) => item.id === skillId)
+      onUpdate(node.id, { reverseMethodType: 'skill', reverseSkillId: skillId, templateLabel: skill?.name || '自动识别 · 已训练的反推 Skill' })
+      return
+    }
+    const templateId = value.slice(9), template = templates.find((item) => item.id === templateId)
+    onUpdate(node.id, { reverseMethodType: 'template', reverseSkillId: '', templateId, templateLabel: template?.label || node.templateLabel || '提示词模板' })
+  }
   const grouped = Object.values(nodes.reduce((groups, node) => {
     if (!node.workflowGroupId) return groups
     const source = elementById.get(node.sourceElementId)
@@ -651,19 +759,24 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
     return { from, to, middle: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }, path: `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}` }
   }
   return <div ref={layerRef} className="workflow-layer">
-    <svg className="workflow-links">{grouped.map((group) => { const point = toScreen(group.left, group.top); return <g className="workflow-group" key={group.id}><rect x={point.x} y={point.y} width={group.width * zoom} height={group.height * zoom} rx={16 * zoom} /><text x={point.x + 14 * zoom} y={point.y + 27 * zoom}>{group.name}</text></g> })}{nodes.map((node) => {
-      const source = elementById.get(node.sourceElementId)
+    <svg className="workflow-links">{grouped.map((group) => { const point = toScreen(group.left, group.top); return <g className="workflow-group" key={group.id}><rect x={point.x} y={point.y} width={group.width * zoom} height={group.height * zoom} rx={16 * zoom} /><text x={point.x + 14 * zoom} y={point.y + 27 * zoom}>{group.name}</text></g> })}{nodes.flatMap((node) => {
       const parent = nodeById.get(node.parentNodeId)
-      if (!source && !parent) return null
-      const link = connector(parent ? nodeBox(parent) : source, nodeBox(node))
-      const relation = parent ? 'parent' : 'source'
-      const relationLabel = parent ? '断开两个提示词节点' : '断开图片与提示词节点'
-      return <g className="workflow-link" key={node.id}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /><g className="workflow-link-control" role="button" aria-label={relationLabel} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDisconnect(node.id, relation) }}><circle cx={link.middle.x} cy={link.middle.y} r="12" /><text x={link.middle.x} y={link.middle.y + 4}>×</text></g></g>
+      const sourceIds = parent ? [] : node.templateId === 'canvas-chat'
+        ? [...new Set([node.sourceElementId, ...(node.referenceImages || []).map((reference) => reference.canvasElementId)].filter(Boolean))]
+        : [node.sourceElementId].filter(Boolean)
+      const relations = parent
+        ? [{ source: parent, relation: 'parent' }]
+        : sourceIds.map((id) => ({ source: elementById.get(id), relation: node.templateId === 'canvas-chat' ? { type: 'reference', elementId: id } : 'source' })).filter((item) => item.source)
+      return relations.map(({ source, relation }) => {
+        const link = connector(parent ? nodeBox(parent) : source, nodeBox(node))
+        const relationLabel = parent ? '断开两个提示词节点' : '断开图片与提示词节点'
+        return <g className="workflow-link" data-node-id={node.id} data-source-id={source.id} key={node.id + '-' + source.id}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /><g className="workflow-link-control" role="button" aria-label={relationLabel} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDisconnect(node.id, relation) }}><circle cx={link.middle.x} cy={link.middle.y} r="12" /><text x={link.middle.x} y={link.middle.y + 4}>×</text></g></g>
+      })
     })}{nodes.flatMap((node) => (node.generatedElementIds || []).map((id) => {
       const target = elementById.get(id)
       if (!target) return null
       const link = connector(nodeBox(node), target)
-      return <g className="workflow-link generation-link" key={`${node.id}-${id}`}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /></g>
+      return <g className="workflow-link generation-link" data-node-id={node.id} data-target-id={id} key={`${node.id}-${id}`}><path d={link.path} /><circle className="workflow-port" cx={link.from.x} cy={link.from.y} r="5" /><circle className="workflow-port" cx={link.to.x} cy={link.to.y} r="5" /></g>
     }))}</svg>
     {nodes.flatMap((node) => (node.generatedElementIds || []).map((id) => {
       const target = elementById.get(id)
@@ -676,7 +789,12 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
     {nodes.map((node) => {
       const position = toScreen(node.x, node.y), currentTemplate = templates.find((item) => item.id === node.templateId) || templates.find((item) => item.label === node.templateLabel) || templates.find((item) => item.id === selectedTemplateId) || templates[0], text = node.kind === 'modify' ? (node.output || node.prompt) : node.prompt
       const references = node.referenceImages || (node.referenceImage ? [{ ...node.referenceImage, id: `legacy-${node.id}`, role: '补充参考' }] : [])
-      return <article key={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''} ${openGenerationSettings.startsWith(`${node.id}:`) ? 'settings-open' : ''}`} style={{ width: nodeBox(node).width, minHeight: node.collapsed ? 0 : nodeBox(node).height, ...(['compose', 'modify', 'prompt'].includes(node.kind) && !node.collapsed ? { height: nodeBox(node).height } : {}), ...(node.kind === 'compose' ? { '--compose-node-height': `${nodeBox(node).height}px` } : {}), transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
+      const promptTextHeight = Number.isFinite(Number(node.promptTextHeight)) && Number(node.promptTextHeight) > 0 ? Math.max(70, Number(node.promptTextHeight)) : 177
+      const outputTextHeight = textareaHeight(node, 'outputTextHeight', 160)
+      const modifyOriginalHeight = textareaHeight(node, 'modifyOriginalHeight', 80)
+      const modifyInstructionHeight = textareaHeight(node, 'modifyInstructionHeight', 60)
+      const modifyResultHeight = textareaHeight(node, 'modifyResultHeight', 163)
+      return <article key={node.id} data-workflow-node-id={node.id} className={`workflow-node ${node.kind} ${node.collapsed ? 'collapsed' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''} ${openGenerationSettings.startsWith(`${node.id}:`) ? 'settings-open' : ''}`} style={{ width: nodeBox(node).width, minHeight: node.collapsed ? 0 : nodeBox(node).height, ...(['compose', 'modify', 'prompt'].includes(node.kind) && !node.collapsed ? { height: nodeBox(node).height } : {}), ...(node.kind === 'compose' ? { '--compose-node-height': `${nodeBox(node).height}px` } : {}), transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})` }} onPointerDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) onSelect(node.id, event.shiftKey) }}>
         <header className={'node-drag-handle ' + (node.kind === 'prompt' ? 'prompt-node-header' : node.kind === 'compose' ? 'compose-node-header' : node.kind === 'modify' ? 'modify-node-header' : '')} onPointerDown={(event) => startDrag(event, node)} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} title="按住此处拖动节点">
           {node.kind === 'prompt' ? <>
             <span className={'node-status ' + (node.status || (node.busy ? 'running' : 'completed'))} />
@@ -709,7 +827,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
           </label>
           <div className="compose-reference-status"><span className={'node-status ' + (node.status || 'completed')} /><small>{references.length ? '已关联 ' + references.length + ' 张产品参考图；编辑提示词或重新生成均会保留产品参考。' : '未关联产品参考图'}</small></div>
           <label className="compose-prompt-label"><img src="/ui-icons/prompt-text-recognition.svg" alt="" />提示词</label>
-          <div className="compose-prompt-frame"><textarea className="compose-prompt-editor" aria-label="组合生图提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /><button type="button" className="compose-prompt-resize" aria-label="拖动以拉高提示词框" title="拖动以拉高提示词框" onPointerDown={(event) => startComposeResize(event, node)} onPointerMove={moveComposeResize} onPointerUp={stopComposeResize} onPointerCancel={stopComposeResize}><span /><span /><span /></button></div>
+          <div className="compose-prompt-frame"><textarea className="compose-prompt-editor" aria-label="组合生图提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} /><button type="button" className="compose-prompt-resize" aria-label="拖动以拉高提示词框" title="拖动以拉高提示词框" onPointerDown={(event) => startComposeResize(event, node)} onPointerMove={moveComposeResize} onPointerUp={stopComposeResize} onPointerCancel={stopComposeResize}><img src="/ui-icons/textarea-resize.svg" alt="" draggable="false" /></button></div>
           {node.error && <p className="compose-node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
           {node.generationError && <p className="compose-node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
           {node.generationBusy && <div className="compose-generation-progress"><span>{node.generationStatus || '正在生成…'}</span><button type="button" onClick={() => onCancelGeneration(node)}>取消</button></div>}
@@ -721,7 +839,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
             <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => runGeneration(event, node)} disabled={node.generationBusy || !node.prompt?.trim()}>{node.generationBusy ? '生成中…' : '组合生图'}</button>
             <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
           </footer>
-        </section> : node.kind === 'modify' ? <section className="modify-node-body" style={{ '--modify-extra-reference-space': `${Math.max(0, Math.ceil(Math.min(8, references.length) / 5) - 1) * 92}px` }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+        </section> : node.kind === 'modify' ? <section className="modify-node-body" style={{ '--modify-extra-reference-space': `${Math.max(0, Math.ceil(Math.min(8, references.length) / 5) - 1) * 92}px`, '--modify-original-height': `${modifyOriginalHeight}px`, '--modify-instruction-height': `${modifyInstructionHeight}px`, '--modify-result-height': `${modifyResultHeight}px`, '--modify-original-delta': `${modifyOriginalHeight - 80}px`, '--modify-instruction-delta': `${modifyInstructionHeight - 60}px`, '--modify-result-delta': `${modifyResultHeight - 163}px` }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <div className="modify-template-caption"><span className="modify-template-radio" /><span>修改提示词模板</span></div>
           <label className="modify-template-select" aria-label="修改提示词模板">
             <select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>
@@ -730,35 +848,41 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
             </select><img src="/ui-icons/prompt-arrow-down.svg" alt="" />
           </label>
           <label className="modify-field-caption modify-original-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>原版提示词</span></label>
-          <textarea className="modify-original-input" aria-label="原版提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          <div className="modify-textarea-frame modify-original-frame"><textarea className="modify-original-input" aria-label="原版提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />{renderTextareaResizeHandle(node, 'modifyOriginalHeight', 80, 80, 900, 'modify-original-resize')}</div>
           <label className="modify-field-caption modify-instruction-caption"><img src="/ui-icons/prompt-magic.svg" alt="" /><span>修改要求</span></label>
-          <textarea className="modify-instruction-input" aria-label="修改要求" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value, outputInstruction: '' })} />
+          <div className="modify-textarea-frame modify-instruction-frame"><textarea className="modify-instruction-input" aria-label="修改要求" value={node.instruction || ''} onChange={(event) => onUpdate(node.id, { instruction: event.target.value, outputInstruction: '' })} />{renderTextareaResizeHandle(node, 'modifyInstructionHeight', 60, 60, 500, 'modify-instruction-resize')}</div>
           <div className="modify-field-caption modify-reference-caption"><img src="/ui-icons/prompt-picture-one.svg" alt="" /><span>补充参考图片（最多 8 张）</span>
             <label className="modify-upload-button"><input type="file" multiple accept="image/*" onChange={(event) => { onAttachImage(node.id, event.target.files); event.currentTarget.value = '' }} disabled={references.length >= 8} /><span>上传图片</span></label>
           </div>
           <div className="modify-reference-grid">{references.slice(0, 8).map((image) => <figure key={image.id}><img src={image.dataURL} alt={image.name || '修改参考图'} /><button type="button" aria-label="移除参考图片" onClick={() => onRemoveImage(node.id, image.id)}><span aria-hidden="true">×</span></button></figure>)}</div>
           <label className="modify-field-caption modify-result-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>修改结果</span></label>
-          <textarea className="modify-result-input" aria-label="修改结果" value={node.output || ''} onChange={(event) => onUpdate(node.id, { output: event.target.value, outputInstruction: node.instruction || '', outputTemplateId: node.templateId || '', outputSourcePrompt: node.prompt || '' })} />
+          <div className="modify-textarea-frame modify-result-frame"><textarea className="modify-result-input" aria-label="修改结果" value={node.output || ''} onChange={(event) => onUpdate(node.id, { output: event.target.value, outputInstruction: node.instruction || '', outputTemplateId: node.templateId || '', outputSourcePrompt: node.prompt || '' })} />{renderTextareaResizeHandle(node, 'modifyResultHeight', 163, 163, 1200, 'modify-result-resize')}</div>
           {(node.error || node.generationError) && <p className="modify-node-feedback">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</p>}
           <div className="modify-generation-controls">
             {renderGenerationSettings(node)}
             <label className="modify-consistency-toggle"><input type="checkbox" checked={node.productConsistency !== false} onChange={(event) => changeGenerationSetting(event, node, 'productConsistency', event.target.checked)} /><span className="modify-consistency-check">{node.productConsistency !== false && <img src="/ui-icons/prompt-check.svg" alt="" />}</span><span>保持产品一致</span></label>
           </div>
           <footer className="modify-node-actions">
-            <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRegenerate(node, true) }} disabled={node.busy || !node.prompt?.trim()}>{node.busy ? '正在修改…' : '提示词修改'}</button>
-            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (node.generationBusy) onCancelGeneration(node); else { const needsPromptUpdate = !node.output?.trim() || node.outputInstruction !== (node.instruction || '') || node.outputTemplateId !== (node.templateId || '') || node.outputSourcePrompt !== (node.prompt || ''); if (needsPromptUpdate) onModifyAndGenerate(node, { textOnly: !references.length }); else runGeneration(event, node, { textOnly: !references.length }) } }} disabled={node.busy || !node.prompt?.trim()}>{node.generationBusy ? '取消生图' : '组合生图'}</button>
+            <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRegenerate(node, true) }} disabled={node.busy || !node.prompt?.trim() || (node.promptOnlyModify && !node.instruction?.trim())}>{node.busy ? '正在修改…' : '提示词修改'}</button>
+            <button className="node-primary" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (node.generationBusy) onCancelGeneration(node); else { const needsPromptUpdate = !node.output?.trim() || node.outputInstruction !== (node.instruction || '') || node.outputTemplateId !== (node.templateId || '') || node.outputSourcePrompt !== (node.prompt || ''); if (needsPromptUpdate) onModifyAndGenerate(node, { textOnly: !references.length }); else runGeneration(event, node, { textOnly: !references.length }) } }} disabled={node.busy || !node.prompt?.trim() || (node.promptOnlyModify && !node.instruction?.trim())}>{node.generationBusy ? '取消生图' : '组合生图'}</button>
             <button onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDelete(node.id) }}>删除节点</button>
           </footer>
-        </section> : node.kind === 'prompt' ? <section className={`prompt-node-body ${node.error || node.generationError ? 'has-error' : ''}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-          <div className="prompt-template-caption"><span className="prompt-template-radio" /><span>当前使用的模板</span></div>
-          <label className="prompt-template-select" aria-label="当前使用的模板">
-            <select value={currentTemplate?.id || node.templateId || ''} onChange={(event) => { const template = templates.find((item) => item.id === event.target.value); onUpdate(node.id, { templateId: event.target.value, templateLabel: template?.label || event.target.value }) }}>
-              {!templates.some((item) => item.id === (node.templateId || '')) && <option value={node.templateId || ''}>{node.templateLabel || currentTemplate?.label || '人车真实场景摄影'}</option>}
-              {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+        </section> : node.kind === 'prompt' ? <section className={`prompt-node-body ${node.error || node.generationError ? 'has-error' : ''}`} style={{ '--prompt-text-height': promptTextHeight + 'px' }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <div className="prompt-template-caption"><span className="prompt-template-radio" /><span>反推方式</span></div>
+          <label className="prompt-template-select" aria-label="反推方式">
+            <select value={reverseChoiceValue(node)} onChange={(event) => chooseReverseMethod(node, event.target.value)}>
+              <optgroup label="Skill">
+                <option value="skill:reverse-image-prompt-glm4v">自动识别 · 已训练的反推 Skill</option>
+                {reverseSkills.filter((skill) => skill.id !== 'reverse-image-prompt-glm4v').map((skill) => <option key={skill.id} value={'skill:' + skill.id}>{skill.name}</option>)}
+              </optgroup>
+              <optgroup label="提示词模板">
+                {!templates.some((item) => item.id === node.templateId) && node.templateId && node.templateId !== 'reverse-image-prompt-glm4v' && <option value={'template:' + node.templateId}>{node.templateLabel || '当前模板'}</option>}
+                {templates.map((template) => <option key={template.id} value={'template:' + template.id}>{template.label}</option>)}
+              </optgroup>
             </select><img src="/ui-icons/prompt-arrow-down.svg" alt="" />
           </label>
           <label className="prompt-field-caption"><img src="/ui-icons/prompt-text-recognition.svg" alt="" /><span>提示词</span></label>
-          <textarea className="prompt-node-input" aria-label="提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />
+          <div className="workflow-node-textarea-frame"><textarea className="prompt-node-input" aria-label="提示词" value={node.prompt || ''} onChange={(event) => onUpdate(node.id, { prompt: event.target.value })} />{renderTextareaResizeHandle(node, 'promptTextHeight', 177, 70, 1200)}</div>
           {(node.error || node.generationError) && <div className="prompt-node-feedback" role="alert">{node.error ? `提示词处理：${node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}` : `图像生成：${node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}`}</div>}
           <div className="prompt-generation-controls" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
             {renderGenerationSettings(node)}
@@ -776,7 +900,7 @@ function WorkflowNodes({ nodes, elements, viewport, layerRef, templates, selecte
         {node.kind === 'skill' && <small className="node-composition-note">Skill v{node.skillVersion || 1} · 输入：{(node.skillRequires || []).join('、') || '无'} · 输出：{node.skillOutputType === 'analysis' ? '分析与建议' : '完整提示词'}</small>}
         {node.kind === 'compose' && <small className="node-composition-note">已关联 {references.length} 张产品参考图{node.promptReferenceImages?.length ? `，另有 ${node.promptReferenceImages.length} 张提示词参考图` : ''}；编辑提示词或重新生成均会保留产品参考。</small>}
         {node.kind === 'blender' && <section className="node-generation-settings"><small>场景：{node.blenderMeta?.sceneName || '未命名'} · Blender {node.blenderMeta?.blenderVersion || '-'} · {node.blenderMeta?.sourceType === 'blender_render' ? '正式渲染' : '摄像机视口'}</small><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockCamera} onChange={(event) => { const lockCamera = event.target.checked, prompt = blenderPromptForNode(node, { lockCamera }); onUpdate(node.id, { lockCamera, prompt, output: prompt }) }} />锁定摄像机</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.lockLighting} onChange={(event) => { const lockLighting = event.target.checked, prompt = blenderPromptForNode(node, { lockLighting }); onUpdate(node.id, { lockLighting, prompt, output: prompt }) }} />锁定光源</label><label className="consistency-toggle"><input type="checkbox" checked={node.lockProductOrientation !== false} onChange={(event) => { const lockProductOrientation = event.target.checked, prompt = blenderPromptForNode(node, { lockProductOrientation }); onUpdate(node.id, { lockProductOrientation, prompt, output: prompt }) }} />锁定产品朝向（禁止镜像）</label><label className="consistency-toggle"><input type="checkbox" checked={!!node.useStructurePasses} onChange={(event) => { const useStructurePasses = event.target.checked, prompt = blenderPromptForNode(node, { useStructurePasses }); onUpdate(node.id, { useStructurePasses, prompt, output: prompt }) }} />结构约束（{references.length}）</label></section>}
-        <label>{node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => node.kind === 'blender' ? onUpdate(node.id, { prompt: event.target.value, output: event.target.value, blenderBasePrompt: stripBlenderConstraintBlocks(event.target.value) }) : onUpdate(node.id, { [node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} /></label>
+        <label>{node.kind === 'compose' ? '组合提示词（可直接编辑）' : node.kind === 'skill' ? 'Skill 结果（可直接编辑）' : '提示词（可直接编辑）'}<div className="workflow-node-textarea-frame" style={{ height: `${outputTextHeight}px` }}><textarea className="node-output" value={node.kind === 'skill' ? (node.output || '') : (text || '')} onChange={(event) => node.kind === 'blender' ? onUpdate(node.id, { prompt: event.target.value, output: event.target.value, blenderBasePrompt: stripBlenderConstraintBlocks(event.target.value) }) : onUpdate(node.id, { [node.kind === 'skill' ? 'output' : 'prompt']: event.target.value })} />{renderTextareaResizeHandle(node, 'outputTextHeight', 160, 160, 1400)}</div></label>
         {!!node.versionHistory?.length && <details className="node-versions"><summary>历史版本（{node.versionHistory.length}）</summary>{[...node.versionHistory].reverse().map((version, index) => <button key={version.id || index} onClick={() => onUpdate(node.id, { [node.kind === 'modify' || node.kind === 'skill' ? 'output' : 'prompt']: version.prompt, model: version.model || node.model, templateId: version.templateId || node.templateId, templateLabel: version.templateLabel || node.templateLabel })}><b>{new Date(version.createdAt || Date.now()).toLocaleString()}</b><span>{version.templateLabel || version.model || '历史结果'}</span></button>)}</details>}
         {node.error && <p className="node-error">提示词处理：{node.error === '[object Event]' ? '历史图片加载记录已失效，请重试' : node.error}</p>}
         {node.generationError && <p className="node-error">图像生成：{node.generationError === '[object Event]' ? '生成结果无法解码，请重试' : node.generationError}</p>}
@@ -864,7 +988,7 @@ function SkillLibrary({ skills, context, projectId, onUse, onSave, onDelete, onE
     <div className="skill-library-tools"><input type="search" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、分类或标签…" /><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select><button className="primary" onClick={() => setEditing(blank)}>＋ 新建</button><button onClick={() => fileInput.current?.click()}>导入 JSON / SKILL.md</button><button onClick={() => onExport([])}>导出全部</button><input ref={fileInput} hidden type="file" accept=".json,.md" onChange={async (event) => { await readImport(event.target.files?.[0]); event.target.value = '' }} /></div>
     {skillActionNotice && <p className="skill-action-notice" role="status">{skillActionNotice}</p>}
     {importPreview && <section className="skill-import-preview"><h3>{importPreview.kind === 'json' ? `导入确认：${importPreview.count} 个 Skill` : `导入预览：${importPreview.name}`}</h3><p>{importPreview.kind === 'json' ? `来源：${importPreview.source}。确认后才会写入本机 Skill 库；最多导入前 100 条有效记录。` : `来源：${importPreview.source}。仅导入文字指令；不会运行脚本、安装依赖或访问外部网站。请先检查内容。`}</p><textarea readOnly value={importPreview.kind === 'json' ? importPreview.previewText : importPreview.instruction} />{skillActionError && <p className="skill-action-error" role="alert">操作失败：{skillActionError}</p>}<div><button disabled={skillActionBusy} onClick={() => { setImportPreview(null); setSkillActionError('') }}>取消</button>{importPreview.kind !== 'json' && <button disabled={skillActionBusy} onClick={() => { setEditing(importPreview); setImportPreview(null); setSkillActionError('') }}>检查并编辑</button>}<button className="primary" disabled={skillActionBusy} onClick={confirmSkillImport}>{skillActionBusy ? (importPreview.kind === 'json' ? '正在导入…' : '正在保存…') : '确认导入并保存'}</button></div></section>}
-    {editing ? <section className="skill-editor"><h3>{editing.id ? `编辑：${editing.name} · v${editing.version}` : '新建 Skill'}</h3>{editing.revisions?.length > 0 && <label>恢复旧版（先载入编辑器，保存后成为新版本）<select value="" onChange={(event) => { const old = editing.revisions.find((item) => String(item.version) === event.target.value); if (old) setEditing({ ...editing, ...old, version: editing.version, revisions: editing.revisions }) }}><option value="">选择旧版…</option>{[...editing.revisions].reverse().map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.savedAt).toLocaleString()}</option>)}</select></label>}<label>名称<input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label><label>简介<input value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></label><div><label>分类<input value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} /></label><label>标签（逗号分隔）<input value={editing.tags.join(', ')} onChange={(event) => setEditing({ ...editing, tags: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label></div><label>适用范围<select value={editing.scopeProjectId || ''} onChange={(event) => setEditing({ ...editing, scopeProjectId: event.target.value })}><option value="">所有项目</option><option value={projectId}>仅当前项目</option></select></label><label>所需上下文<span className="skill-requires">{Object.entries(names).map(([key, label]) => <label key={key}><input type="checkbox" checked={(editing.requires || []).includes(key)} onChange={(event) => setEditing({ ...editing, requires: event.target.checked ? [...new Set([...(editing.requires || []), key])] : editing.requires.filter((item) => item !== key) })} />{label}</label>)}</span></label><label>输出类型<select value={editing.outputType} onChange={(event) => setEditing({ ...editing, outputType: event.target.value })}><option value="prompt">完整提示词</option><option value="analysis">分析与建议</option></select></label><label>执行指令<textarea value={editing.instruction} onChange={(event) => setEditing({ ...editing, instruction: event.target.value })} placeholder="告诉 AI 如何利用当前上下文完成工作…" /></label>{skillActionError && <p className="skill-action-error" role="alert">保存失败：{skillActionError}</p>}<footer><button disabled={skillActionBusy} onClick={() => { setEditing(null); setSkillActionError('') }}>取消</button><button className="primary" disabled={skillActionBusy} onClick={saveEditedSkill}>{skillActionBusy ? '正在保存…' : '保存 Skill'}</button></footer></section> : <div className="skill-grid">{matches.map((skill) => { const unavailable = missing(skill); return <article key={skill.id} className={unavailable.length ? 'unavailable' : ''}><header><label className="skill-preset-select" title="加入组合"><input type="checkbox" checked={presetSelection.includes(skill.id)} onChange={(event) => setPresetSelection(event.target.checked ? [...presetSelection, skill.id] : presetSelection.filter((id) => id !== skill.id))} /></label><span>{skill.category}</span><button title={skill.favorite ? '取消收藏' : '收藏'} onClick={() => onSave({ ...skill, favorite: !skill.favorite })}>{skill.favorite ? '★' : '☆'}</button></header><h3>{skill.name}</h3><p>{skill.description}</p><div className="skill-tags">{skill.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><small>{sourceName(skill)} · {skill.scopeProjectId ? '仅当前项目' : '所有项目'} · v{skill.version}</small><small>需要：{(skill.requires || []).map((key) => names[key]).join('、') || '无'} · {skill.outputType === 'analysis' ? '分析结果' : '提示词节点'}</small>{unavailable.length ? <em>缺少：{unavailable.map((key) => names[key]).join('、')}</em> : <button className="primary" onClick={() => onUse(skill)}>使用 Skill</button>}<footer><button onClick={() => setEditing({ ...skill, builtIn: false, id: '', name: `${skill.name} 副本`, source: 'local', revisions: [] })}>复制</button>{!skill.builtIn && <button onClick={() => setEditing(skill)}>编辑／回退</button>}<button className="danger" onClick={() => onDelete(skill.id)}>删除</button></footer></article>})}{!matches.length && <p className="skill-empty">没有匹配的 Skill。你可以新建一个，或调整搜索与分类。</p>}</div>}
+    {editing ? <section className="skill-editor"><h3>{editing.id ? `编辑：${editing.name} · v${editing.version}` : '新建 Skill'}</h3>{editing.revisions?.length > 0 && <label>恢复旧版（先载入编辑器，保存后成为新版本）<select value="" onChange={(event) => { const old = editing.revisions.find((item) => String(item.version) === event.target.value); if (old) setEditing({ ...editing, ...old, version: editing.version, revisions: editing.revisions }) }}><option value="">选择旧版…</option>{[...editing.revisions].reverse().map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.savedAt).toLocaleString()}</option>)}</select></label>}<label>名称<input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label><label>简介<input value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })} /></label><div><label>分类<input value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} /></label><label>标签（逗号分隔）<input value={editing.tags.join(', ')} onChange={(event) => setEditing({ ...editing, tags: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label></div><label>适用范围<select value={editing.scopeProjectId || ''} onChange={(event) => setEditing({ ...editing, scopeProjectId: event.target.value })}><option value="">所有项目</option><option value={projectId}>仅当前项目</option></select></label><label>所需上下文<span className="skill-requires">{Object.entries(names).map(([key, label]) => <label key={key}><input type="checkbox" checked={(editing.requires || []).includes(key)} onChange={(event) => setEditing({ ...editing, requires: event.target.checked ? [...new Set([...(editing.requires || []), key])] : editing.requires.filter((item) => item !== key) })} />{label}</label>)}</span></label><label>输出类型<select value={editing.outputType} onChange={(event) => setEditing({ ...editing, outputType: event.target.value })}><option value="prompt">完整提示词</option><option value="analysis">分析与建议</option></select></label><label>执行指令<textarea value={editing.instruction} onChange={(event) => setEditing({ ...editing, instruction: event.target.value })} placeholder="告诉 AI 如何利用当前上下文完成工作…" /></label>{skillActionError && <p className="skill-action-error" role="alert">保存失败：{skillActionError}</p>}<footer><button disabled={skillActionBusy} onClick={() => { setEditing(null); setSkillActionError('') }}>取消</button><button className="primary" disabled={skillActionBusy} onClick={saveEditedSkill}>{skillActionBusy ? '正在保存…' : '保存 Skill'}</button></footer></section> : <div className="skill-grid">{matches.map((skill) => { const unavailable = missing(skill); return <article key={skill.id} className={unavailable.length ? 'unavailable' : ''}><header><label className="skill-preset-select" title="加入组合"><input type="checkbox" checked={presetSelection.includes(skill.id)} onChange={(event) => setPresetSelection(event.target.checked ? [...presetSelection, skill.id] : presetSelection.filter((id) => id !== skill.id))} /></label><span>{skill.category}</span><button title={skill.favorite ? '取消收藏' : '收藏'} onClick={() => onSave({ ...skill, favorite: !skill.favorite })}>{skill.favorite ? '★' : '☆'}</button></header><h3>{skill.name}</h3><p>{skill.description}</p><div className="skill-tags">{skill.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><small>{sourceName(skill)} · {skill.scopeProjectId ? '仅当前项目' : '所有项目'} · v{skill.version}</small><small>需要：{(skill.requires || []).map((key) => names[key]).join('、') || '无'} · {skill.outputType === 'analysis' ? '分析结果' : '提示词节点'}</small>{unavailable.length ? <em>缺少：{unavailable.map((key) => names[key]).join('、')}</em> : <button className="primary" onClick={() => onUse(skill)}>使用 Skill</button>}<footer><button onClick={() => setEditing({ ...skill, builtIn: false, id: '', name: `${skill.name} 副本`, source: 'local', revisions: [] })}>复制</button>{!skill.builtIn && <button onClick={() => setEditing(skill)}>编辑／回退</button>}{!skill.builtIn && <button className="danger" onClick={() => onDelete(skill.id)}>删除</button>}</footer></article>})}{!matches.length && <p className="skill-empty">没有匹配的 Skill。你可以新建一个，或调整搜索与分类。</p>}</div>}
   </section></div>
 }
 
@@ -891,7 +1015,91 @@ function ProjectSkillTraining({ project, scene, skills, onEnable, onSave, onClos
   return <div className="skill-library-backdrop" onMouseDown={onClose}><section className="project-training-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>PROJECT SKILL TRAINING</small><h2>训练 Skill · {project.name}</h2></div><button onClick={onClose}>×</button></header><p>当前项目已是训练画布。确认下面条件后，系统会创建或更新本机 Skill，并将本项目作为一条可追溯示范案例。</p><div className="project-training-stats"><span>图片 {images.length}</span><span>文本 {texts.length}</span><span>节点 {nodes.length}</span><span>已训练案例 {existing?.trainingExamples?.length || 0}</span></div><section className="project-training-form"><label>Skill 名称<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>简介<input value={description} onChange={(event) => setDescription(event.target.value)} /></label><div><label>分类<input value={category} onChange={(event) => setCategory(event.target.value)} /></label><label>标签（逗号分隔）<input value={tags} onChange={(event) => setTags(event.target.value)} /></label></div><label>运行时需要的上下文<span className="skill-requires">{Object.entries(labels).map(([key, label]) => <label key={key}><input type="checkbox" checked={requires.includes(key)} onChange={(event) => toggleRequire(key, event.target.checked)} />{label}</label>)}</span></label><label>执行指令<textarea defaultValue={existing?.instruction || '参考已确认的项目训练案例与当前上下文，提炼可复用的创作策略；保持产品事实与用户明确要求一致，直接输出本 Skill 指定的结果。'} id="project-training-instruction" /></label></section><footer><button onClick={onClose}>取消</button><button className="primary" disabled={!name.trim()} onClick={() => onSave({ ...(existing || {}), id: existing?.id || '', name: name.trim(), description: description.trim(), category: category.trim() || '项目训练', tags: tags.split(',').map((item) => item.trim()).filter(Boolean), requires, instruction: document.getElementById('project-training-instruction')?.value || '', outputType: existing?.outputType || 'prompt', favorite: existing?.favorite || false, version: existing?.version || 1, trainingExamples: [...(existing?.trainingExamples || []).filter((item) => item.projectId !== project.id), createExample()] })}>保存训练 Skill</button></footer></section></div>
 }
 
+const INFERENCE_MODELS = [
+  ['gpt-4o', 'GPT-4o'], ['gpt-4o-mini', 'GPT-4o mini'], ['gpt-4-turbo', 'GPT-4 Turbo'],
+  ['claude-3-5-sonnet', 'Claude 3.5 Sonnet'], ['claude-3-opus', 'Claude 3 Opus'],
+  ['gemini-2.5-flash', 'Gemini 2.5 Flash'], ['gemini-2.5-flash-lite', 'Gemini 2.5 Flash-Lite'],
+  ['glm-4v', 'GLM-4V'], ['qwen3-vl-flash', 'Qwen3-VL-Flash'],
+  ['mimo-v2.6-pro', 'MiMo-V2.6-Pro'], ['mimo-v2.6-flash', 'MiMo-V2.6-Flash'],
+  ['mimo-v2.6-pro-ultraspeed', 'MiMo-V2.6-Pro-UltraSpeed'], ['custom', '自定义模型'],
+]
+const aiDraftFromStatus = (status) => ({
+  enabled: status?.enabled !== false, apiKey: '', apiBase: status?.apiBase || '', model: status?.model || 'gpt-4o',
+  customModel: status?.customModel || '', promptTemplateId: status?.promptTemplateId || status?.promptTemplates?.[0]?.id || '',
+  promptTemplate: status?.promptTemplate || '', promptTemplates: (status?.promptTemplates || []).map((item) => ({ ...item })),
+})
+
+function AiSettingsPanel({ section, status, onSaved }) {
+  const [draft, setDraft] = useState(() => aiDraftFromStatus(status))
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [bridgeToken, setBridgeToken] = useState('')
+  useEffect(() => { if (status && !dirty) setDraft(aiDraftFromStatus(status)) }, [status?.updatedAt, dirty])
+  useEffect(() => { invoke('get_ai_bridge_token').then(setBridgeToken).catch(() => {}) }, [])
+  const change = (changes) => { setDraft((current) => ({ ...current, ...changes })); setDirty(true); setMessage('') }
+  const selected = draft.promptTemplates.find((item) => item.id === draft.promptTemplateId) || draft.promptTemplates[0]
+  const updateTemplate = (changes) => {
+    if (!selected) return
+    change({ promptTemplates: draft.promptTemplates.map((item) => item.id === selected.id ? { ...item, ...changes } : item), promptTemplate: changes.content ?? selected.content })
+  }
+  const save = async () => {
+    if (!draft.model || (draft.model === 'custom' && !draft.customModel.trim())) return setMessage('请填写推理模型')
+    if (draft.model === 'custom' && !draft.apiBase.trim()) return setMessage('自定义模型需要填写接口地址')
+    if (!draft.promptTemplates.length || draft.promptTemplates.some((item) => !item.label.trim() || !item.content.trim())) return setMessage('请为每个提示词模板填写名称和内容')
+    setSaving(true); setMessage('正在保存…')
+    try {
+      const selectedTemplate = draft.promptTemplates.find((item) => item.id === draft.promptTemplateId) || draft.promptTemplates[0]
+      const result = await invoke('set_ai_config', { config: { ...draft, promptTemplateId: selectedTemplate.id, promptTemplate: selectedTemplate.content, updatedAt: null } })
+      setDirty(false); setDraft(aiDraftFromStatus(result.status)); onSaved(result.status)
+      setMessage('已保存到软件；画布中的后续反推将使用新设置')
+    } catch (error) { setMessage(`保存失败：${errorMessage(error)}`) }
+    finally { setSaving(false) }
+  }
+  return <div className="ai-settings-panel">
+    {section === 'model' ? <>
+      <div className="ai-settings-heading"><div><h2>推理模型</h2><p>图片反推与提示词助手共用这里的模型设置。</p></div><span>{status?.configured ? '已配置' : '待配置'}</span></div>
+      <div className="ai-settings-form">
+        <label>模型<select value={draft.model} onChange={(event) => change({ model: event.target.value })}>{!INFERENCE_MODELS.some(([value]) => value === draft.model) && <option value={draft.model}>{draft.model}</option>}{INFERENCE_MODELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        {draft.model === 'custom' && <label>自定义模型名称<input value={draft.customModel} onChange={(event) => change({ customModel: event.target.value })} placeholder="填写模型 ID" /></label>}
+        <label>接口地址<input value={draft.apiBase} onChange={(event) => change({ apiBase: event.target.value })} placeholder="留空使用模型默认地址" /></label>
+        <label>API Key<input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => change({ apiKey: event.target.value })} placeholder={status?.hasApiKey ? '已保存；留空保持原密钥' : '填写 API Key'} /></label>
+      </div>
+      <div className="ai-settings-pair"><div><b>连接浏览器插件（可选）</b><p>仅支持带连接功能的插件。现有旧版插件不会自动读取软件设置；连接后密钥仍保存在软件中。</p></div><input aria-label="插件连接码" readOnly value={bridgeToken} /><button type="button" onClick={() => navigator.clipboard.writeText(bridgeToken).then(() => setMessage('连接码已复制')).catch(() => setMessage('复制失败，请手动复制'))}>复制连接码</button></div>
+    </> : <>
+      <div className="ai-settings-heading"><div><h2>提示词模板</h2><p>画布反推使用这里的模板；支持连接功能的插件也可读取。</p></div><span>{draft.promptTemplates.length} 个模板</span></div>
+      <div className="ai-template-layout"><div className="ai-template-list">{draft.promptTemplates.map((item) => <button key={item.id} type="button" className={selected?.id === item.id ? 'active' : ''} onClick={() => change({ promptTemplateId: item.id, promptTemplate: item.content })}>{item.label}</button>)}<button type="button" onClick={() => { const item = { id: `custom_${Date.now()}`, label: '新模板', content: '请反推图片内容，输出可直接用于生图的中文提示词。' }; change({ promptTemplates: [...draft.promptTemplates, item], promptTemplateId: item.id, promptTemplate: item.content }) }}>＋ 新建模板</button></div>
+      {selected && <div className="ai-template-editor"><label>模板名称<input value={selected.label} onChange={(event) => updateTemplate({ label: event.target.value })} /></label><label>模板内容<textarea value={selected.content} onChange={(event) => updateTemplate({ content: event.target.value })} /></label><div><label><input type="radio" checked={draft.promptTemplateId === selected.id} onChange={() => change({ promptTemplateId: selected.id, promptTemplate: selected.content })} /> 默认模板</label><button type="button" disabled={draft.promptTemplates.length <= 1} onClick={() => { const next = draft.promptTemplates.filter((item) => item.id !== selected.id); change({ promptTemplates: next, promptTemplateId: next[0].id, promptTemplate: next[0].content }) }}>删除模板</button></div></div>}</div>
+    </>}
+    <footer><span role="status">{message}</span><button type="button" disabled={saving || !dirty} onClick={save}>{saving ? '保存中…' : '保存设置'}</button></footer>
+  </div>
+}
+
 function App() {
+  const [activeAccount, setActiveAccount] = useState(currentLocalAccount)
+  const [settingsTab, setSettingsTab] = useState('general')
+  useEffect(() => {
+    if (!window.__TAURI__) return undefined
+    let inFlight = false
+    const publish = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        for (;;) {
+          const events = pendingSharedGenerationEvents().slice(0, 200)
+          if (!events.length) break
+          const result = await invoke('publish_generation_usage', { events })
+          markSharedGenerationEventsSynced(result.acknowledged || [])
+          window.dispatchEvent(new Event('prompt-vault-shared-usage-updated'))
+        }
+      } catch (error) { console.info('共享盘生图记录待补传', String(error)) }
+      finally { inFlight = false }
+    }
+    void publish()
+    window.addEventListener('prompt-vault-local-generation-event', publish)
+    const timer = setInterval(publish, 30000)
+    return () => { clearInterval(timer); window.removeEventListener('prompt-vault-local-generation-event', publish) }
+  }, [])
   const [mode, setMode] = useState('canvas')
   const [vaultLoaded, setVaultLoaded] = useState(false)
   const [projects, setProjects] = useState(loadProjects)
@@ -967,6 +1175,7 @@ function App() {
   const [compositionPromptBusy, setCompositionPromptBusy] = useState(false)
   const [compositionPromptError, setCompositionPromptError] = useState('')
   const [canvasTextGenerationBusy, setCanvasTextGenerationBusy] = useState(false)
+  const [canvasTextGenerationSettings, setCanvasTextGenerationSettings] = useState({ ...GENERATION_DEFAULTS })
   const [imageService, setImageService] = useState({ configured: false, baseUrl: '', model: '', mode: 'openai', generatePath: '/images/generations', editPath: '/images/edits', statusPath: '', cancelPath: '', defaultSize: '1024x1024', downloadDirectory: '', apiKey: '' })
   const [imageServiceMessage, setImageServiceMessage] = useState('')
   const [directoryDialogBusy, setDirectoryDialogBusy] = useState(false)
@@ -998,6 +1207,16 @@ function App() {
   const [workflowNodes, setWorkflowNodes] = useState(() => sceneRef.current.workflowNodes || [])
   const [selectedNodeIds, setSelectedNodeIds] = useState([])
   const [selectedCanvasIds, setSelectedCanvasIds] = useState([])
+  const manuallySelectedWorkflowNodeIdsRef = useRef([])
+  const [addingCanvasReferences, setAddingCanvasReferences] = useState(false)
+  const setWorkflowNodeSelection = (ids) => {
+    manuallySelectedWorkflowNodeIdsRef.current = []
+    setSelectedNodeIds(ids)
+  }
+  const setManuallySelectedWorkflowNodes = (ids) => {
+    manuallySelectedWorkflowNodeIdsRef.current = ids
+    setSelectedNodeIds(ids)
+  }
   const [, setHistoryVersion] = useState(0)
   const [viewport, setViewport] = useState({ scrollX: 0, scrollY: 0, zoom: 1 })
   const viewportRef = useRef({ scrollX: 0, scrollY: 0, zoom: 1 })
@@ -1272,9 +1491,16 @@ function App() {
     if (window.__TAURI__) invoke('save_canvas_scene', { projectId, data }).then(() => localStorage.removeItem(sceneKey(projectId))).catch((error) => console.warn('桌面项目保存失败', error))
     else localStorage.setItem(sceneKey(projectId), data)
   }
-  const recordNodeHistory = () => {
+  const captureNodeHistorySnapshot = (includeCanvasPositions = false) => {
+    const scene = sceneRef.current
+    return {
+      workflowNodes: structuredClone(scene.workflowNodes || []),
+      ...(includeCanvasPositions ? { elementPositions: Object.fromEntries((scene.elements || []).map((element) => [element.id, { x: element.x, y: element.y }])) } : {}),
+    }
+  }
+  const recordNodeHistory = (includeCanvasPositions = false) => {
     const history = nodeHistoryRef.current
-    history.past.push(structuredClone(sceneRef.current.workflowNodes || []))
+    history.past.push(captureNodeHistorySnapshot(includeCanvasPositions))
     if (history.past.length > 50) history.past.shift()
     history.future = []
     setHistoryVersion((value) => value + 1)
@@ -1283,11 +1509,26 @@ function App() {
     const history = nodeHistoryRef.current, source = direction === 'undo' ? history.past : history.future
     if (!source.length) return
     const target = source.pop()
+    const targetNodes = Array.isArray(target) ? target : (target.workflowNodes || [])
     const destination = direction === 'undo' ? history.future : history.past
-    destination.push(structuredClone(sceneRef.current.workflowNodes || []))
-    sceneRef.current = { ...sceneRef.current, workflowNodes: target }
-    setWorkflowNodes(target); setSelectedNodeIds([]); setHistoryVersion((value) => value + 1)
-    persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, target)
+    destination.push(captureNodeHistorySnapshot(!Array.isArray(target) && !!target.elementPositions))
+    const current = sceneRef.current
+    let elements = current.elements || []
+    if (!Array.isArray(target) && target.elementPositions) {
+      const positions = target.elementPositions
+      const movedAt = Date.now()
+      elements = elements.map((element) => {
+        const position = positions[element.id]
+        if (!position || (element.x === position.x && element.y === position.y)) return element
+        return { ...element, x: position.x, y: position.y, version: (element.version || 0) + 1, versionNonce: nonce(), updated: movedAt }
+      })
+      canvasElementRevisionRef.current = elements.map((element) => `${element.id}:${element.version}:${element.versionNonce}:${element.isDeleted ? 1 : 0}`)
+      sourcePositionsRef.current = Object.fromEntries(elements.filter((element) => !element.isDeleted).map((element) => [element.id, { x: element.x, y: element.y }]))
+      api.current?.updateScene({ elements })
+    }
+    sceneRef.current = { ...current, elements, workflowNodes: targetNodes }
+    setWorkflowNodes(targetNodes); setWorkflowNodeSelection([]); setHistoryVersion((value) => value + 1)
+    persist(elements, current.appState || emptyScene.appState, current.files, targetNodes)
   }
   const selectProject = async (projectId) => {
     if (projectId === activeProjectRef.current && !projectSwitchingRef.current) return
@@ -1316,7 +1557,7 @@ function App() {
     setCanvasInstanceVersion((version) => version + 1)
     setWorkflowNodes(nextScene.workflowNodes || [])
     nodeHistoryRef.current = { past: [], future: [] }
-    setSelectedNodeIds([])
+    setWorkflowNodeSelection([])
     setSelected(null)
     setSelectedCanvasIds([]); canvasSelectionRef.current = ''
     try { setChatMessages(JSON.parse(localStorage.getItem(chatKey(projectId))) || []) } catch { setChatMessages([]) }
@@ -1518,6 +1759,15 @@ function App() {
     return syncCanvasFilesToAssets(files)
   }
   const selectedCanvasElements = useMemo(() => selectedCanvasIds.map((id) => sceneRef.current.elements.find((element) => element.id === id && !element.isDeleted)).filter(Boolean), [selectedCanvasIds, workflowNodes])
+  const selectedCanvasImages = useMemo(() => selectedCanvasElements.filter((element) => element.type === 'image' && element.fileId), [selectedCanvasElements])
+  const selectedModifyReferenceTarget = useMemo(() => {
+    const matches = workflowNodes.filter((node) => node.kind === 'modify' && selectedNodeIds.includes(node.id))
+    return matches.length === 1 ? matches[0] : null
+  }, [workflowNodes, selectedNodeIds])
+  const selectedModifyReferenceCount = selectedModifyReferenceTarget
+    ? (selectedModifyReferenceTarget.referenceImages || []).length || (selectedModifyReferenceTarget.referenceImage ? 1 : 0)
+    : 0
+  const canAddSelectedImagesToModify = Boolean(selectedModifyReferenceTarget && selectedCanvasImages.length)
   const selectedCanvasPrompt = useMemo(() => selectedCanvasElements.filter((element) => element.type === 'text').map((element) => element.text || '').join('\n').trim(), [selectedCanvasElements])
   const selectedProductElements = useMemo(() => selectedCanvasElements.filter((element) => element.type === 'image' && element.fileId), [selectedCanvasElements])
   const selectedProductReferences = useMemo(() => selectedProductElements.map((element) => {
@@ -1786,6 +2036,28 @@ function App() {
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     return node.id
   }
+  const createSelectedPromptModifyNode = () => {
+    const prompt = selectedCanvasPrompt.trim()
+    const source = selectedPromptElements[0]
+    if (!prompt || !source) return
+    recordNodeHistory()
+    const template = aiStatus?.promptTemplates?.find((item) => item.id === selectedTemplateId)
+    const node = {
+      id: uid(), kind: 'modify', sourceElementId: source.id, parentNodeId: null,
+      x: source.x + source.width + 160, y: source.y, width: 620, height: 660,
+      model: imageService.model || aiStatus?.model || '当前模型',
+      templateId: selectedTemplateId || 'manual', templateLabel: template?.label || '手动提示词修改',
+      prompt, instruction: '', output: '', busy: false, status: 'completed',
+      referenceImages: [], versionHistory: [], ...canvasTextGenerationSettings,
+      generationTextOnly: true, productConsistency: false, promptOnlyModify: true,
+    }
+    const nodes = [...(sceneRef.current.workflowNodes || []), node]
+    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
+    setWorkflowNodes(nodes)
+    setManuallySelectedWorkflowNodes([node.id])
+    persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+    requestAnimationFrame(() => focusWorkflowNode(node))
+  }
   const createCompositionNode = (promptOverride = '', promptReferenceImages = []) => {
     if (!canComposeGeneration) { alert('请同时选中至少一段提示词文本和一张产品参考图。'); return null }
     const source = selectedProductElements[0]
@@ -1800,7 +2072,7 @@ function App() {
     }
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
-    setWorkflowNodes(nodes); setSelectedNodeIds([node.id])
+    setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes([node.id])
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     return node
   }
@@ -1816,13 +2088,13 @@ function App() {
       x: source.x + source.width + 140, y: source.y, width: 620, height: 560,
       model: imageService.model || '当前生图模型', templateId: 'manual', templateLabel: '画布纯提示词测试',
       prompt, instruction: '', output: prompt, busy: false, status: 'completed',
-      ...GENERATION_DEFAULTS,
+      ...canvasTextGenerationSettings,
       referenceImages: [], versionHistory: [], generationTextOnly: true, productConsistency: false,
     }
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
-    setSelectedNodeIds([node.id])
+    setManuallySelectedWorkflowNodes([node.id])
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     try { await generatePreview(node, { textOnly: true }) }
     catch (error) { alert(`纯提示词生图失败：${errorMessage(error)}`) }
@@ -1922,7 +2194,7 @@ function App() {
     const elements = [...sceneRef.current.elements, ...canvasReferences.map(({ element }) => element)]
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
     sceneRef.current = { ...sceneRef.current, elements, files, workflowNodes: nodes }
-    setWorkflowNodes(nodes); setSelectedNodeIds([node.id])
+    setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes([node.id])
     const displayFiles = canvasReferences.map(({ preview }) => preview)
     displayFiles.forEach((file) => { displayFilesRef.current[file.id] = file })
     api.current?.addFiles(displayFiles)
@@ -1962,45 +2234,83 @@ function App() {
       const liveElements = (scene.elements || []).filter((element) => !element.isDeleted)
       const sceneFiles = { ...(scene.files || {}) }
       const nodeReferences = []
+      const referenceElements = []
+      const newReferenceElements = []
+      const newReferenceFiles = []
       let sourceElement = null
       for (const reference of references.slice(0, 8)) {
         const candidateElement = reference.canvasElementId ? liveElements.find((element) => element.id === reference.canvasElementId) : null
         if (candidateElement) {
           sourceElement ||= candidateElement
           const fileId = reference.fileId || candidateElement.fileId || reference.id
-          nodeReferences.push({ ...reference, dataURL: reference.dataURL, fileId, assetId: reference.assetId || sceneFiles[fileId]?.assetId || null, originalDataURL: undefined })
+          nodeReferences.push({ ...reference, dataURL: reference.dataURL, fileId, assetId: reference.assetId || sceneFiles[fileId]?.assetId || null, canvasElementId: candidateElement.id, sourceFile: undefined, originalDataURL: undefined })
+          referenceElements.push(candidateElement)
           continue
         }
         const rawDataURL = reference.sourceFile ? await readImageFile(reference.sourceFile) : reference.originalDataURL || reference.dataURL
         if (!rawDataURL?.startsWith('data:image/')) continue
+        const image = await new Promise((resolve, reject) => { const value = new Image(); value.onload = () => resolve(value); value.onerror = reject; value.src = rawDataURL })
+        const scale = Math.min(1, 360 / Math.max(image.naturalWidth, image.naturalHeight))
+        const width = Math.round(image.naturalWidth * scale), height = Math.round(image.naturalHeight * scale)
+        image.src = ''
         const fileId = uid()
         const asset = await storeProjectAsset({ id: fileId, dataURL: rawDataURL, name: reference.name || '生图参考图', mimeType: reference.mimeType || 'image/png', kind: 'image', tags: ['生图参考'], projectId: targetProjectId })
         const file = { id: fileId, assetId: asset.assetId, ...(asset.assetId ? {} : { dataURL: rawDataURL }), mimeType: reference.mimeType || 'image/png', created: Date.now(), lastRetrieved: Date.now(), version: 1 }
         sceneFiles[fileId] = file
-        nodeReferences.push({ ...reference, id: fileId, fileId, assetId: asset.assetId || null, dataURL: asset.previewDataURL || reference.dataURL, sourceFile: undefined, originalDataURL: undefined, canvasElementId: undefined })
+        const fallbackPreview = asset.previewDataURL ? null : await makeCanvasDisplayFile({ ...file, dataURL: rawDataURL })
+        const displayFile = { ...file, dataURL: asset.previewDataURL || fallbackPreview.dataURL, mimeType: asset.previewDataURL ? 'image/webp' : fallbackPreview.mimeType || file.mimeType }
+        const imageElement = { id: uid(), type: 'image', x: 0, y: 0, width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid', roughness: 0, opacity: 100, groupIds: [], frameId: null, seed: nonce(), version: 1, versionNonce: nonce(), isDeleted: false, boundElements: null, updated: Date.now(), link: null, locked: false, scale: [1, 1], crop: null, fileId, status: 'saved', customData: { assistantReference: true, canvasGenerationReference: true } }
+        const canvasReference = { ...reference, id: fileId, fileId, assetId: asset.assetId || null, dataURL: displayFile.dataURL, sourceFile: undefined, originalDataURL: undefined, canvasElementId: imageElement.id }
+        nodeReferences.push(canvasReference)
+        referenceElements.push(imageElement)
+        newReferenceElements.push(imageElement)
+        newReferenceFiles.push(displayFile)
+        sourceElement ||= imageElement
       }
       if (targetProjectId !== activeProjectRef.current) throw new Error('当前项目已切换，本次生成已取消，请回到原项目重新提交。')
       const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
       const boardWidth = boardRef.current?.clientWidth || 900
       const boardHeight = boardRef.current?.clientHeight || 700
       const center = { x: -(viewportRef.current.scrollX || 0) + boardWidth / (2 * zoom), y: -(viewportRef.current.scrollY || 0) + boardHeight / (2 * zoom) }
+      const existingReferenceElements = referenceElements.filter((element) => !newReferenceElements.includes(element))
+      if (newReferenceElements.length) {
+        const gap = 28
+        const imageRowWidth = newReferenceElements.reduce((total, element) => total + element.width, gap * (newReferenceElements.length - 1))
+        const maxImageHeight = Math.max(...newReferenceElements.map((element) => element.height))
+        const existingRight = existingReferenceElements.length ? Math.max(...existingReferenceElements.map((element) => element.x + element.width)) : null
+        let x = existingRight == null ? center.x - (imageRowWidth + 160 + 620) / 2 : existingRight + 160
+        const y = existingReferenceElements.length ? Math.min(...existingReferenceElements.map((element) => element.y)) : center.y - maxImageHeight / 2
+        for (const element of newReferenceElements) {
+          element.x = Math.round(x)
+          element.y = Math.round(y)
+          x += element.width + gap
+        }
+      }
+      const referenceLeft = referenceElements.length ? Math.min(...referenceElements.map((element) => element.x)) : center.x - 310
+      const referenceRight = referenceElements.length ? Math.max(...referenceElements.map((element) => element.x + element.width)) : center.x + 310
+      const referenceTop = referenceElements.length ? Math.min(...referenceElements.map((element) => element.y)) : center.y - 280
+      const referenceBottom = referenceElements.length ? Math.max(...referenceElements.map((element) => element.y + element.height)) : center.y + 280
       const generationNode = {
         id: uid(), kind: 'prompt', sourceElementId: sourceElement?.id || null, parentNodeId: null,
-        x: sourceElement ? sourceElement.x + sourceElement.width + 160 : center.x - 310,
-        y: sourceElement ? sourceElement.y : center.y - 280,
+        x: referenceElements.length ? referenceRight + 160 : center.x - 310,
+        y: referenceElements.length ? referenceTop : center.y - 280,
         width: 620, height: 560, model: imageService.model || '当前生图模型', templateId: 'canvas-chat',
         templateLabel: '画布生图', prompt, instruction: '', output: '', busy: false, status: 'completed',
         referenceImages: nodeReferences, referenceImage: null, referenceImageMode: nodeReferences.length ? 'scene' : null,
         versionHistory: [], ...GENERATION_DEFAULTS, ...assistantGenerationSettings,
         generationTextOnly: textOnly || nodeReferences.length === 0, productConsistency: false,
       }
-      const nodes = [...(sceneRef.current.workflowNodes || []), generationNode]
-      sceneRef.current = { ...sceneRef.current, files: sceneFiles, workflowNodes: nodes }
+      const nodes = [...(scene.workflowNodes || []), generationNode]
+      const elements = [...(scene.elements || []), ...newReferenceElements]
+      sceneRef.current = { ...scene, elements, files: sceneFiles, workflowNodes: nodes }
       setWorkflowNodes(nodes)
+      newReferenceFiles.forEach((file) => { displayFilesRef.current[file.id] = file })
+      if (newReferenceFiles.length) api.current?.addFiles(newReferenceFiles)
       setSelected(null); setSelectedCanvasIds([])
-      api.current?.updateScene({ appState: { selectedElementIds: {} } })
-      focusGenerationContext(generationNode, sourceElement)
-      persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneFiles, nodes)
+      api.current?.updateScene({ elements, appState: { selectedElementIds: {} } })
+      const focusSource = referenceElements.length ? { x: referenceLeft, y: referenceTop, width: referenceRight - referenceLeft, height: referenceBottom - referenceTop } : null
+      focusGenerationContext(generationNode, focusSource)
+      persist(elements, sceneRef.current.appState || emptyScene.appState, sceneFiles, nodes)
       setAssistantInput('')
       setAssistantReferences([])
       const pendingMessage = { ...responseMessage, nodeId: generationNode.id, text: `已提交 ${generationNode.generationAspect} · ${generationNode.generationQuality} · ${generationNode.generationCount} 张，结果会作为新节点添加到画布。` }
@@ -2088,7 +2398,7 @@ function App() {
       sceneRef.current = { ...sceneRef.current, elements, files, workflowNodes: nodes }
       setWorkflowNodes(nodes)
       persist(elements, current.appState || emptyScene.appState, files, nodes)
-      setSelectedNodeIds([node.id]); requestAnimationFrame(() => focusWorkflowNode(node))
+      setManuallySelectedWorkflowNodes([node.id]); requestAnimationFrame(() => focusWorkflowNode(node))
     } else if (payload.prompt?.trim()) addPromptNode(payload.prompt, payload.model || '插件当前模型', 'reverse', element, { id: payload.templateId || '', label: payload.templateLabel || '插件当前模板' }, null, { generationTextOnly: true })
   }
   useEffect(() => {
@@ -2136,14 +2446,31 @@ function App() {
       const blenderBasePrompt = result.prompt.trim()
       const prompt = blenderPromptForNode({ ...node, blenderBasePrompt, prompt: blenderBasePrompt })
       updateWorkflowNode(node.id, { busy: false, status: 'completed', error: '', blenderBasePrompt, prompt, output: prompt, model: result.model || node.model, templateId: result.templateId || node.templateId, templateLabel: result.templateLabel || '参考场景适配' })
-      setSelectedNodeIds([node.id])
+      setManuallySelectedWorkflowNodes([node.id])
       requestAnimationFrame(() => focusWorkflowNode({ ...node, prompt }))
     } catch (error) {
       updateWorkflowNode(node.id, { busy: false, status: 'failed', error: errorMessage(error, '参考场景反推失败，请重试') })
     } finally { setBlenderReferenceBusy(false) }
   }
+  const selectedWorkflowNodeIdsForCanvas = (nodes, canvasIds) => {
+    const canvasNodeIds = nodes.filter((node) => canvasIds.includes(node.sourceElementId)).map((node) => node.id)
+    const existingNodeIds = new Set(nodes.map((node) => node.id))
+    const manuallySelectedNodeIds = manuallySelectedWorkflowNodeIdsRef.current.filter((nodeId) => existingNodeIds.has(nodeId))
+    manuallySelectedWorkflowNodeIdsRef.current = manuallySelectedNodeIds
+    return [...new Set([...canvasNodeIds, ...manuallySelectedNodeIds])]
+  }
   const selectWorkflowNode = (id, additive = false) => {
-    setSelectedNodeIds((current) => additive ? (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) : [id])
+    const currentManual = manuallySelectedWorkflowNodeIdsRef.current
+    const nextManual = additive
+      ? currentManual.includes(id) ? currentManual.filter((nodeId) => nodeId !== id) : [...currentManual, id]
+      : [id]
+    manuallySelectedWorkflowNodeIdsRef.current = nextManual
+    if (!additive) {
+      setSelectedNodeIds([id])
+      return
+    }
+    const canvasNodeIds = workflowNodes.filter((node) => selectedCanvasIds.includes(node.sourceElementId)).map((node) => node.id)
+    setSelectedNodeIds([...new Set([...canvasNodeIds, ...nextManual])])
   }
   const moveWorkflowNodes = (ids, positions, dx, dy) => {
     const nodes = (sceneRef.current.workflowNodes || []).map((node) => ids.includes(node.id) && positions[node.id] ? { ...node, x: positions[node.id].x + dx, y: positions[node.id].y + dy } : node)
@@ -2151,10 +2478,469 @@ function App() {
     setWorkflowNodes(nodes)
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
+  const autoArrangeCanvas = () => {
+    const current = sceneRef.current
+    const images = (current.elements || []).filter((element) => !element.isDeleted && element.type === 'image')
+    const nodes = current.workflowNodes || []
+    const texts = (current.elements || []).filter((element) => !element.isDeleted && element.type === 'text' && String(element.text || '').trim())
+    if (!images.length && !nodes.length && !texts.length) return
+
+    const imageById = new Map(images.map((element) => [element.id, element]))
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const textById = new Map(texts.map((element) => [element.id, element]))
+    const renderedNodeSizes = new Map(Array.from(workflowLayerRef.current?.querySelectorAll('[data-workflow-node-id]') || []).map((element) => [element.dataset.workflowNodeId, { width: element.offsetWidth, height: element.offsetHeight }]))
+    const generatedOwnerByImage = new Map()
+    for (const node of nodes) for (const id of node.generatedElementIds || []) if (imageById.has(id)) generatedOwnerByImage.set(id, node.id)
+
+    const items = [
+      ...images.map((element) => ({ id: element.id, kind: 'image', value: element, x: element.x || 0, y: element.y || 0, width: Math.max(80, Math.abs(element.width || 0)), height: Math.max(80, Math.abs(element.height || 0)) })),
+      ...texts.map((element) => ({ id: element.id, kind: 'text', value: element, x: element.x || 0, y: element.y || 0, width: Math.max(120, Math.abs(element.width || 0)), height: Math.max(40, Math.abs(element.height || 0)) })),
+      ...nodes.map((node) => {
+        const rendered = renderedNodeSizes.get(node.id)
+        const height = node.collapsed ? Math.max(58, rendered?.height || 0) : Math.max(180, Number(node.height) || 560, rendered?.height || 0)
+        return { id: node.id, kind: 'node', value: node, x: node.x || 0, y: node.y || 0, width: Math.max(240, Number(node.width) || 620, rendered?.width || 0), height }
+      }),
+    ]
+    const itemById = new Map(items.map((item) => [item.id, item]))
+    const ownerForImage = (image) => nodeById.has(image?.customData?.promptNodeId) ? image.customData.promptNodeId : generatedOwnerByImage.get(image?.id)
+    const imageConsumers = new Map()
+    for (const node of nodes) {
+      const imageIds = new Set([node.sourceElementId, ...(node.referenceImages || []).map((ref) => ref.canvasElementId || ref.elementId), node.referenceImage?.canvasElementId || node.referenceImage?.elementId].filter(Boolean))
+      for (const id of imageIds) {
+        if (!imageById.has(id)) continue
+        const consumers = imageConsumers.get(id) || []
+        consumers.push(node)
+        imageConsumers.set(id, consumers)
+      }
+    }
+
+    const textConsumers = new Map()
+    for (const node of nodes) {
+      const textId = node.sourceElementId
+      if (!textById.has(textId)) continue
+      const consumers = textConsumers.get(textId) || []
+      consumers.push(node)
+      textConsumers.set(textId, consumers)
+    }
+    const nodeRoots = new Map(nodes.map((node) => [node.id, node.id]))
+    const findNodeRoot = (id) => {
+      let root = id
+      while (nodeRoots.has(root) && nodeRoots.get(root) !== root) root = nodeRoots.get(root)
+      let current = id
+      while (nodeRoots.has(current) && nodeRoots.get(current) !== root) {
+        const next = nodeRoots.get(current)
+        nodeRoots.set(current, root)
+        current = next
+      }
+      return root
+    }
+    const joinNodeGroups = (left, right) => {
+      if (!nodeRoots.has(left) || !nodeRoots.has(right)) return
+      const leftRoot = findNodeRoot(left), rightRoot = findNodeRoot(right)
+      if (leftRoot !== rightRoot) nodeRoots.set(rightRoot, leftRoot)
+    }
+    const workflowGroupOwners = new Map()
+    for (const node of nodes) {
+      if (node.parentNodeId) joinNodeGroups(node.id, node.parentNodeId)
+      const source = imageById.get(node.sourceElementId)
+      const sourceOwner = ownerForImage(source)
+      if (sourceOwner && (imageConsumers.get(source.id) || []).length === 1) joinNodeGroups(node.id, sourceOwner)
+      if (node.workflowGroupId) {
+        const owner = workflowGroupOwners.get(node.workflowGroupId)
+        if (owner) joinNodeGroups(node.id, owner)
+        else workflowGroupOwners.set(node.workflowGroupId, node.id)
+      }
+    }
+    for (const [imageId, consumers] of imageConsumers) {
+      const image = imageById.get(imageId), owner = ownerForImage(image)
+      if (owner && nodeById.has(owner) && consumers.length === 1 && consumers[0].sourceElementId === imageId) {
+        joinNodeGroups(consumers[0].id, owner)
+      }
+      // A shared reference is one visual input, not one generation branch.
+      // Keep its consumers in their own lineages instead of merging their layouts.
+    }
+    const groupsByRoot = new Map()
+    const groupByNodeId = new Map()
+    for (const node of nodes) {
+      const root = findNodeRoot(node.id)
+      const group = groupsByRoot.get(root) || { id: root, nodes: [], inputs: [], textInputs: [], outputs: [] }
+      group.nodes.push(node)
+      groupsByRoot.set(root, group)
+      groupByNodeId.set(node.id, group)
+    }
+    const assignedImageIds = new Set()
+    for (const image of images) {
+      const owner = ownerForImage(image)
+      const group = owner && groupByNodeId.get(owner)
+      if (!group) continue
+      group.outputs.push(image)
+      assignedImageIds.add(image.id)
+    }
+    for (const image of images) {
+      if (assignedImageIds.has(image.id)) continue
+      const consumers = imageConsumers.get(image.id) || []
+      // Only an exclusive input belongs inside a branch. Shared inputs are
+      // placed once as separate canvas items, so they cannot pull branches together.
+      const group = consumers.length === 1 ? groupByNodeId.get(consumers[0].id) : null
+      if (group) {
+        group.inputs.push(image)
+        assignedImageIds.add(image.id)
+      }
+    }
+    const assignedTextIds = new Set()
+    for (const [textId, consumers] of textConsumers) {
+      const group = consumers.length === 1 ? groupByNodeId.get(consumers[0].id) : null
+      const sourceText = textById.get(textId)
+      if (group && sourceText) { group.textInputs.push(sourceText); assignedTextIds.add(textId) }
+    }
+    const standaloneImageGroups = images.filter((image) => !assignedImageIds.has(image.id)).map((image) => ({ id: `image:${image.id}`, nodes: [], inputs: [image], textInputs: [], outputs: [], standalone: true }))
+
+    const standaloneTextGroups = texts.filter((element) => !assignedTextIds.has(element.id)).map((element) => ({ id: `text:${element.id}`, nodes: [], inputs: [], textInputs: [element], outputs: [], standalone: true }))
+    const nodeStageCache = new Map()
+    const resolveNodeStage = (id, resolving = new Set()) => {
+      if (nodeStageCache.has(id)) return nodeStageCache.get(id)
+      const node = nodeById.get(id)
+      if (!node || resolving.has(id)) return 0
+      resolving.add(id)
+      let stage = 0
+      if (node.parentNodeId && nodeById.has(node.parentNodeId)) stage = Math.max(stage, resolveNodeStage(node.parentNodeId, resolving) + 1)
+      if (textById.has(node.sourceElementId)) stage = Math.max(stage, 1)
+      const sourceImageIds = new Set([node.sourceElementId, ...(node.referenceImages || []).map((ref) => ref.canvasElementId || ref.elementId), node.referenceImage?.canvasElementId || node.referenceImage?.elementId].filter(Boolean))
+      for (const imageId of sourceImageIds) {
+        const sourceImage = imageById.get(imageId)
+        if (!sourceImage) continue
+        const sourceOwner = ownerForImage(sourceImage)
+        if (sourceOwner && sourceOwner !== id && nodeById.has(sourceOwner)) stage = Math.max(stage, resolveNodeStage(sourceOwner, resolving) + 2)
+        else stage = Math.max(stage, 1)
+      }
+      resolving.delete(id)
+      nodeStageCache.set(id, stage)
+      return stage
+    }
+    const itemStage = (item) => item.kind === 'node' ? resolveNodeStage(item.id) : item.kind === 'text' ? 0 : (ownerForImage(item.value) && nodeById.has(ownerForImage(item.value)) ? resolveNodeStage(ownerForImage(item.value)) + 1 : 0)
+    const orderWorkflowNodes = (nodeItems) => {
+      const nodeIds = new Set(nodeItems.map((item) => item.id))
+      const predecessors = new Map(nodeItems.map((item) => [item.id, new Set()]))
+      const successors = new Map(nodeItems.map((item) => [item.id, new Set()]))
+      for (const item of nodeItems) {
+        const node = item.value
+        const imageIds = [node.sourceElementId, ...(node.referenceImages || []).map((ref) => ref.canvasElementId || ref.elementId), node.referenceImage?.canvasElementId || node.referenceImage?.elementId]
+        const upstreamIds = new Set([node.parentNodeId, ...imageIds.map((imageId) => ownerForImage(imageById.get(imageId)))].filter((id) => id && id !== node.id && nodeIds.has(id)))
+        for (const upstreamId of upstreamIds) {
+          predecessors.get(node.id).add(upstreamId)
+          successors.get(upstreamId).add(node.id)
+        }
+      }
+      const nodesByStage = new Map()
+      for (const item of nodeItems) {
+        const stage = itemStage(item), column = nodesByStage.get(stage) || []
+        column.push(item); nodesByStage.set(stage, column)
+      }
+      const stages = [...nodesByStage.keys()].sort((a, b) => a - b)
+      for (const items of nodesByStage.values()) items.sort((a, b) => a.y - b.y || a.x - b.x)
+      const laneRanks = new Map()
+      const updateRanks = (items) => items.forEach((item, index) => laneRanks.set(item.id, items.length === 1 ? 0.5 : index / (items.length - 1)))
+      for (const items of nodesByStage.values()) updateRanks(items)
+      const reorder = (stage, neighbors) => {
+        const items = nodesByStage.get(stage), previousOrder = new Map(items.map((item, index) => [item.id, index]))
+        const score = (item) => {
+          const ranks = [...neighbors.get(item.id)].map((id) => laneRanks.get(id)).filter(Number.isFinite)
+          return ranks.length ? ranks.reduce((sum, rank) => sum + rank, 0) / ranks.length : null
+        }
+        items.sort((a, b) => {
+          const aScore = score(a), bScore = score(b)
+          const aPosition = aScore ?? (previousOrder.get(a.id) + 0.5) / Math.max(1, items.length)
+          const bPosition = bScore ?? (previousOrder.get(b.id) + 0.5) / Math.max(1, items.length)
+          return aPosition - bPosition || previousOrder.get(a.id) - previousOrder.get(b.id)
+        })
+        updateRanks(items)
+      }
+      for (let pass = 0; pass < 4; pass++) {
+        for (const stage of stages) reorder(stage, predecessors)
+        for (const stage of [...stages].reverse()) reorder(stage, successors)
+      }
+      return stages.flatMap((stage) => nodesByStage.get(stage))
+    }
+    const componentLayouts = [...groupsByRoot.values(), ...standaloneImageGroups, ...standaloneTextGroups].map((group) => {
+      const groupNodes = orderWorkflowNodes(group.nodes.map((node) => itemById.get(node.id)).filter(Boolean))
+      const inputItems = [...group.inputs, ...(group.textInputs || [])].map((element) => itemById.get(element.id)).filter(Boolean).sort((a, b) => a.y - b.y || a.x - b.x)
+      const outputItems = group.outputs.map((image) => itemById.get(image.id)).filter(Boolean).sort((a, b) => a.y - b.y || a.x - b.x)
+      const groupItems = [...groupNodes, ...inputItems, ...outputItems]
+      const columns = new Map()
+      for (const item of groupItems) {
+        const stage = itemStage(item), column = columns.get(stage) || []
+        column.push(item); columns.set(stage, column)
+      }
+      const stageX = new Map()
+      let stageCursorX = 0
+      for (const [stage, column] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
+        stageX.set(stage, stageCursorX)
+        stageCursorX += Math.max(...column.map((item) => item.width)) + 144
+      }
+      const positions = new Map(), nodeIds = new Set(groupNodes.map((item) => item.id))
+      const outputsByNode = new Map([...nodeIds].map((id) => [id, []]))
+      const referencesByNode = new Map([...nodeIds].map((id) => [id, []]))
+      for (const image of outputItems) {
+        const owner = ownerForImage(image.value)
+        if (owner && outputsByNode.has(owner)) outputsByNode.get(owner).push(image)
+      }
+      for (const node of group.nodes) {
+        const ids = new Set([node.sourceElementId, ...(node.referenceImages || []).map((ref) => ref.canvasElementId || ref.elementId), node.referenceImage?.canvasElementId || node.referenceImage?.elementId].filter(Boolean))
+        for (const id of ids) {
+          const image = inputItems.find((item) => item.id === id)
+          if (image && referencesByNode.has(node.id)) referencesByNode.get(node.id).push(image)
+        }
+      }
+      const lanes = new Map()
+      let cursorY = 0
+      const laneGap = 144
+      for (const node of groupNodes) {
+        const nodeOutputs = outputsByNode.get(node.id) || []
+        const nodeRefs = referencesByNode.get(node.id) || []
+        const outputHeight = nodeOutputs.reduce((sum, image) => sum + image.height, 0) + Math.max(0, nodeOutputs.length - 1) * 48
+        const referenceHeight = nodeRefs.reduce((sum, image) => sum + image.height, 0) + Math.max(0, nodeRefs.length - 1) * 36
+        const laneHeight = Math.max(node.height, outputHeight, referenceHeight)
+        const top = cursorY, nodeY = top + (laneHeight - node.height) / 2
+        lanes.set(node.id, { top, height: laneHeight })
+        positions.set(node.id, { x: stageX.get(itemStage(node)), y: nodeY })
+        let outputY = top + (laneHeight - outputHeight) / 2
+        for (const image of nodeOutputs) {
+          positions.set(image.id, { x: stageX.get(itemStage(image)), y: outputY })
+          outputY += image.height + 48
+        }
+        cursorY += laneHeight + laneGap
+      }
+      for (const image of inputItems) {
+        const consumers = (image.kind === 'text' ? textConsumers : imageConsumers).get(image.id) || []
+        const users = [...new Set(consumers.map((node) => node.id).filter((id) => lanes.has(id)))]
+        const proposedTops = users.map((nodeId) => {
+          const lane = lanes.get(nodeId), refs = referencesByNode.get(nodeId) || [], index = refs.findIndex((ref) => ref.id === image.id)
+          if (index < 0) return null
+          const stackHeight = refs.reduce((sum, ref) => sum + ref.height, 0) + Math.max(0, refs.length - 1) * 36
+          return lane.top + (lane.height - stackHeight) / 2 + refs.slice(0, index).reduce((sum, ref) => sum + ref.height + 36, 0)
+        }).filter((top) => top != null)
+        const item = itemById.get(image.id)
+        if (item && proposedTops.length) positions.set(image.id, { x: stageX.get(itemStage(item)), y: proposedTops.reduce((sum, top) => sum + top, 0) / proposedTops.length })
+        else if (item) { positions.set(item.id, { x: stageX.get(itemStage(item)), y: cursorY }); cursorY += item.height + 64 }
+      }
+      const looseImages = groupItems.filter((item) => item.kind !== 'node' && !positions.has(item.id)).sort((a, b) => itemStage(a) - itemStage(b) || a.y - b.y || a.x - b.x)
+      for (const image of looseImages) { positions.set(image.id, { x: stageX.get(itemStage(image)), y: cursorY }); cursorY += image.height + 64 }
+      const placedItems = []
+      const orderedItems = groupItems.filter((item) => positions.has(item.id)).sort((a, b) => positions.get(a.id).y - positions.get(b.id).y || positions.get(a.id).x - positions.get(b.id).x || a.y - b.y)
+      for (const item of orderedItems) {
+        const position = positions.get(item.id)
+        const horizontalOverlaps = placedItems.filter((placed) => position.x < placed.right && position.x + item.width > placed.left)
+        const y = Math.max(position.y, ...horizontalOverlaps.map((placed) => placed.bottom + 72))
+        const nextPosition = y === position.y ? position : { ...position, y }
+        if (nextPosition !== position) positions.set(item.id, nextPosition)
+        placedItems.push({ left: nextPosition.x, right: nextPosition.x + item.width, bottom: nextPosition.y + item.height })
+      }
+      const width = Math.max(0, ...groupItems.map((item) => (positions.get(item.id)?.x || 0) + item.width))
+      const height = Math.max(0, ...groupItems.map((item) => (positions.get(item.id)?.y || 0) + item.height))
+      const left = Math.min(...groupItems.map((item) => item.x)), top = Math.min(...groupItems.map((item) => item.y))
+      const right = Math.max(...groupItems.map((item) => item.x + item.width)), bottom = Math.max(...groupItems.map((item) => item.y + item.height))
+      return { items: groupItems, positions, width, height, left, top, right, bottom, fixed: groupItems.some((item) => item.value.locked) }
+    }).filter((group) => group.items.length).sort((a, b) => a.top - b.top || a.left - b.left)
+
+    // Place connected branches as adjacent lanes. The branch layouts above stay
+    // independent, but the final packing must respect their cross-branch links.
+    const componentByItemId = new Map()
+    componentLayouts.forEach((component, index) => component.items.forEach((item) => componentByItemId.set(item.id, index)))
+    const successors = componentLayouts.map(() => new Set())
+    const predecessors = componentLayouts.map(() => new Set())
+    for (const node of nodes) {
+      const target = componentByItemId.get(node.id)
+      if (target == null || componentLayouts[target].fixed) continue
+      const inputIds = new Set([node.parentNodeId, node.sourceElementId, ...(node.referenceImages || []).map((ref) => ref.canvasElementId || ref.elementId), node.referenceImage?.canvasElementId || node.referenceImage?.elementId].filter(Boolean))
+      for (const id of inputIds) {
+        const source = componentByItemId.get(id)
+        if (source == null || source === target || componentLayouts[source].fixed) continue
+        successors[source].add(target)
+        predecessors[target].add(source)
+      }
+    }
+    const connected = []
+    const seenComponents = new Set()
+    for (let index = 0; index < componentLayouts.length; index++) {
+      if (seenComponents.has(index)) continue
+      const cluster = [], queue = [index]
+      seenComponents.add(index)
+      while (queue.length) {
+        const currentIndex = queue.shift()
+        cluster.push(currentIndex)
+        for (const neighbor of [...successors[currentIndex], ...predecessors[currentIndex]]) {
+          if (seenComponents.has(neighbor)) continue
+          seenComponents.add(neighbor)
+          queue.push(neighbor)
+        }
+      }
+      connected.push(cluster)
+    }
+    const packedLayouts = connected.map((cluster) => {
+      if (cluster.length === 1) return componentLayouts[cluster[0]]
+      const clusterSet = new Set(cluster)
+      const remainingParents = new Map(cluster.map((index) => [index, [...predecessors[index]].filter((parent) => clusterSet.has(parent)).length]))
+      const stages = new Map(cluster.map((index) => [index, 0]))
+      const queue = cluster.filter((index) => remainingParents.get(index) === 0)
+      while (queue.length) {
+        const source = queue.shift()
+        for (const target of successors[source]) {
+          if (!clusterSet.has(target)) continue
+          stages.set(target, Math.max(stages.get(target), stages.get(source) + 1))
+          remainingParents.set(target, remainingParents.get(target) - 1)
+          if (remainingParents.get(target) === 0) queue.push(target)
+        }
+      }
+      const columns = new Map()
+      for (const index of cluster) {
+        const stage = stages.get(index), members = columns.get(stage) || []
+        members.push(index)
+        columns.set(stage, members)
+      }
+      const sortedStages = [...columns.keys()].sort((a, b) => a - b)
+      for (const members of columns.values()) members.sort((a, b) => componentLayouts[a].top - componentLayouts[b].top || componentLayouts[a].left - componentLayouts[b].left)
+      const ranks = new Map()
+      const updateRanks = (members) => members.forEach((index, order) => ranks.set(index, order))
+      for (const members of columns.values()) updateRanks(members)
+      const reorder = (stage, neighbors) => {
+        const members = columns.get(stage), previous = new Map(members.map((index, order) => [index, order]))
+        const score = (index) => {
+          const connectedRanks = [...neighbors[index]].filter((other) => clusterSet.has(other) && ranks.has(other)).map((other) => ranks.get(other))
+          return connectedRanks.length ? connectedRanks.reduce((sum, rank) => sum + rank, 0) / connectedRanks.length : previous.get(index)
+        }
+        members.sort((a, b) => score(a) - score(b) || previous.get(a) - previous.get(b))
+        updateRanks(members)
+      }
+      for (let pass = 0; pass < 4; pass++) {
+        for (const stage of sortedStages) reorder(stage, predecessors)
+        for (const stage of [...sortedStages].reverse()) reorder(stage, successors)
+      }
+      const stageX = new Map(), stageGap = 220
+      let x = 0
+      for (const stage of sortedStages) {
+        stageX.set(stage, x)
+        x += Math.max(...columns.get(stage).map((index) => componentLayouts[index].width)) + stageGap
+      }
+      const componentY = new Map(), laneGap = 160
+      for (const stage of sortedStages) {
+        let y = 0
+        for (const index of columns.get(stage)) {
+          componentY.set(index, y)
+          y += componentLayouts[index].height + laneGap
+        }
+        const alignments = columns.get(stage).flatMap((index) => {
+          const parents = [...predecessors[index]].filter((parent) => clusterSet.has(parent) && stages.get(parent) < stage && componentY.has(parent))
+          if (!parents.length) return []
+          const parentCenter = parents.reduce((sum, parent) => sum + componentY.get(parent) + componentLayouts[parent].height / 2, 0) / parents.length
+          return [parentCenter - componentY.get(index) - componentLayouts[index].height / 2]
+        })
+        if (alignments.length) {
+          const offset = alignments.reduce((sum, value) => sum + value, 0) / alignments.length
+          for (const index of columns.get(stage)) componentY.set(index, componentY.get(index) + offset)
+        }
+      }
+      const minY = Math.min(...cluster.map((index) => componentY.get(index)))
+      const positions = new Map(), items = []
+      for (const index of cluster) {
+        const component = componentLayouts[index]
+        const offsetX = stageX.get(stages.get(index)), offsetY = componentY.get(index) - minY
+        for (const item of component.items) {
+          const position = component.positions.get(item.id)
+          if (!position) continue
+          items.push(item)
+          positions.set(item.id, { x: position.x + offsetX, y: position.y + offsetY })
+        }
+      }
+      return {
+        items, positions,
+        width: Math.max(...items.map((item) => positions.get(item.id).x + item.width)),
+        height: Math.max(...items.map((item) => positions.get(item.id).y + item.height)),
+        left: Math.min(...cluster.map((index) => componentLayouts[index].left)),
+        top: Math.min(...cluster.map((index) => componentLayouts[index].top)),
+        fixed: false,
+      }
+    }).sort((a, b) => a.top - b.top || a.left - b.left)
+
+    const movable = packedLayouts.filter((component) => !component.fixed)
+    const fixed = packedLayouts.filter((component) => component.fixed)
+    const obstacles = fixed.map(({ left, top, right, bottom }) => ({ left, top, right, bottom }))
+    const originX = Math.min(...items.map((item) => item.x))
+    const originY = Math.min(...items.map((item) => item.y))
+    const zoom = Math.max(0.25, Number(viewport.zoom?.value || viewport.zoom) || 1)
+    const canvasWorldWidth = (boardRef.current?.clientWidth || 1200) / zoom
+    const packWidth = Math.max(1800, canvasWorldWidth * 1.35)
+    const gap = 220
+    let cursorX = originX, cursorY = originY, rowHeight = 0
+    const nextPositions = new Map()
+    for (const component of movable) {
+      let placed = false
+      for (let attempt = 0; attempt < obstacles.length + movable.length + 6; attempt++) {
+        if (cursorX > originX && cursorX + component.width > originX + packWidth) {
+          cursorX = originX; cursorY += rowHeight + gap; rowHeight = 0
+        }
+        const candidate = { left: cursorX, top: cursorY, right: cursorX + component.width, bottom: cursorY + component.height }
+        const overlap = obstacles.find((box) => candidate.left < box.right + gap && candidate.right > box.left - gap && candidate.top < box.bottom + gap && candidate.bottom > box.top - gap)
+        if (!overlap) {
+          for (const item of component.items) {
+            const offset = component.positions.get(item.id)
+            nextPositions.set(item.id, { x: candidate.left + offset.x, y: candidate.top + offset.y })
+          }
+          obstacles.push(candidate)
+          cursorX += component.width + gap
+          rowHeight = Math.max(rowHeight, component.height)
+          placed = true
+          break
+        }
+        const shiftedX = overlap.right + gap
+        if (shiftedX + component.width <= originX + packWidth) cursorX = shiftedX
+        else { cursorX = originX; cursorY = Math.max(cursorY + rowHeight + gap, overlap.bottom + gap); rowHeight = 0 }
+      }
+      if (!placed) {
+        cursorX = originX; cursorY = Math.max(cursorY + rowHeight + gap, ...obstacles.map((box) => box.bottom + gap))
+        for (const item of component.items) {
+          const offset = component.positions.get(item.id)
+          nextPositions.set(item.id, { x: cursorX + offset.x, y: cursorY + offset.y })
+        }
+        const placedBox = { left: cursorX, top: cursorY, right: cursorX + component.width, bottom: cursorY + component.height }
+        obstacles.push(placedBox); rowHeight = component.height; cursorX += component.width + gap
+      }
+    }
+
+    let movedCount = 0
+    const movedAt = Date.now()
+    const elements = (current.elements || []).map((element) => {
+      const position = nextPositions.get(element.id)
+      if (!position || (element.x === position.x && element.y === position.y)) return element
+      movedCount++
+      return { ...element, x: position.x, y: position.y, version: (element.version || 0) + 1, versionNonce: nonce(), updated: movedAt }
+    })
+    const nextNodes = nodes.map((node) => {
+      const position = nextPositions.get(node.id)
+      if (!position || (node.x === position.x && node.y === position.y)) return node
+      movedCount++
+      return { ...node, x: position.x, y: position.y }
+    })
+    if (!movedCount) return
+
+    recordNodeHistory(true)
+    canvasElementRevisionRef.current = elements.map((element) => `${element.id}:${element.version}:${element.versionNonce}:${element.isDeleted ? 1 : 0}`)
+    sourcePositionsRef.current = Object.fromEntries(elements.filter((element) => !element.isDeleted).map((element) => [element.id, { x: element.x, y: element.y }]))
+    sceneRef.current = { ...current, elements, workflowNodes: nextNodes }
+    setWorkflowNodes(nextNodes)
+    api.current?.updateScene({ elements })
+    persist(elements, current.appState || emptyScene.appState, current.files, nextNodes)
+  }
   const disconnectWorkflowNode = (id, relation = 'source') => {
     recordNodeHistory()
-    const patch = relation === 'parent' ? { parentNodeId: null } : { sourceElementId: null }
-    const nodes = (sceneRef.current.workflowNodes || []).map((node) => node.id === id ? { ...node, ...patch } : node)
+    const nodes = (sceneRef.current.workflowNodes || []).map((node) => {
+      if (node.id !== id) return node
+      if (relation && typeof relation === 'object' && relation.type === 'reference') {
+        const referenceImages = (node.referenceImages || []).filter((reference) => reference.canvasElementId !== relation.elementId)
+        const sourceElementId = node.sourceElementId === relation.elementId ? referenceImages.find((reference) => reference.canvasElementId)?.canvasElementId || null : node.sourceElementId
+        return { ...node, sourceElementId, referenceImages, referenceImageMode: referenceImages.length ? node.referenceImageMode : null }
+      }
+      return relation === 'parent' ? { ...node, parentNodeId: null } : { ...node, sourceElementId: null }
+    })
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
@@ -2164,6 +2950,7 @@ function App() {
     const nodes = (sceneRef.current.workflowNodes || []).filter((node) => node.id !== id).map((node) => node.parentNodeId === id ? { ...node, parentNodeId: null } : node)
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
     setWorkflowNodes(nodes)
+    manuallySelectedWorkflowNodeIdsRef.current = manuallySelectedWorkflowNodeIdsRef.current.filter((item) => item !== id)
     setSelectedNodeIds((current) => current.filter((item) => item !== id))
     saveChat(chatMessages.filter((message) => message.nodeId !== id))
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
@@ -2173,7 +2960,7 @@ function App() {
     recordNodeHistory()
     const nodes = (sceneRef.current.workflowNodes || []).filter((node) => !selectedNodeIds.includes(node.id))
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
-    setWorkflowNodes(nodes); setSelectedNodeIds([])
+    setWorkflowNodes(nodes); setWorkflowNodeSelection([])
     saveChat(chatMessages.filter((message) => !selectedNodeIds.includes(message.nodeId)))
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
@@ -2183,7 +2970,7 @@ function App() {
     const copies = (sceneRef.current.workflowNodes || []).filter((node) => selectedNodeIds.includes(node.id)).map((node) => ({ ...node, id: uid(), x: node.x + 44, y: node.y + 44, busy: false }))
     const nodes = [...(sceneRef.current.workflowNodes || []), ...copies]
     sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }
-    setWorkflowNodes(nodes); setSelectedNodeIds(copies.map((node) => node.id))
+    setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes(copies.map((node) => node.id))
     persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
   const groupSelectedWorkflowNodes = () => {
@@ -2232,18 +3019,20 @@ function App() {
     const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
     const nodeWidth = workflowNodeDimensions(node).width
     api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - node.x - nodeWidth / 2, scrollY: height / (2 * zoom) - node.y - 100 } })
-    setSelectedNodeIds([node.id])
+    setManuallySelectedWorkflowNodes([node.id])
   }
   const focusGenerationContext = (node, sourceElement) => {
-    const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
+    const currentZoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
     const width = boardRef.current?.clientWidth || 900, height = boardRef.current?.clientHeight || 700
     const { width: nodeWidth, height: nodeHeight } = workflowNodeDimensions(node)
     const left = sourceElement ? Math.min(sourceElement.x, node.x) : node.x
     const right = sourceElement ? Math.max(sourceElement.x + sourceElement.width, node.x + nodeWidth) : node.x + nodeWidth
     const top = sourceElement ? Math.min(sourceElement.y, node.y) : node.y
     const bottom = sourceElement ? Math.max(sourceElement.y + sourceElement.height, node.y + nodeHeight) : node.y + nodeHeight
-    api.current?.updateScene({ appState: { scrollX: width / (2 * zoom) - (left + right) / 2, scrollY: height / (2 * zoom) - (top + bottom) / 2 } })
-    setSelectedNodeIds([node.id])
+    const fitZoom = Math.min((width - 80) / Math.max(1, right - left), (height - 100) / Math.max(1, bottom - top))
+    const zoom = Math.min(currentZoom, Math.max(0.1, Math.min(1, fitZoom)))
+    api.current?.updateScene({ appState: { zoom: { value: zoom }, scrollX: width / (2 * zoom) - (left + right) / 2, scrollY: height / (2 * zoom) - (top + bottom) / 2 } })
+    setManuallySelectedWorkflowNodes([node.id])
   }
   const focusGenerationResult = (message) => {
     const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === message.nodeId)
@@ -2254,7 +3043,7 @@ function App() {
     const file = canvasFileFor(element.fileId)
     api.current?.updateScene({ appState: { selectedElementIds: { [element.id]: true } } })
     api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
-    setSelected({ ...element, file }); setSelectedCanvasIds([element.id]); setSelectedNodeIds([node.id])
+    setSelected({ ...element, file }); setSelectedCanvasIds([element.id]); setManuallySelectedWorkflowNodes([node.id])
   }
   const searchResults = canvasSearch.trim() ? workflowNodes.filter((node) => [node.prompt, node.output, node.instruction, node.model, node.templateLabel, node.workflowGroupName].some((value) => String(value || '').toLowerCase().includes(canvasSearch.trim().toLowerCase()))).slice(0, 20) : []
   useEffect(() => {
@@ -2264,7 +3053,7 @@ function App() {
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedNodeIds.length) { event.preventDefault(); deleteSelectedWorkflowNodes() }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd' && selectedNodeIds.length) { event.preventDefault(); duplicateSelectedWorkflowNodes() }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && selectedNodeIds.length) { event.preventDefault(); restoreNodeHistory(event.shiftKey ? 'redo' : 'undo') }
-      if (event.key === 'Escape' && selectedNodeIds.length) setSelectedNodeIds([])
+      if (event.key === 'Escape' && selectedNodeIds.length) setWorkflowNodeSelection([])
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -2287,13 +3076,91 @@ function App() {
     }
     updateWorkflowNode(id, { referenceImages: [...existing, ...additions], referenceImage: null, error: '', generationError: '' })
   }
+  const addSelectedCanvasImagesToModify = async () => {
+    const targetId = selectedModifyReferenceTarget?.id
+    if (!targetId || !selectedCanvasImages.length || addingCanvasReferences) return
+    const target = (sceneRef.current.workflowNodes || []).find((node) => node.id === targetId && node.kind === 'modify')
+    if (!target) return
+    const existing = target.referenceImages?.length
+      ? target.referenceImages
+      : target.referenceImage ? [{ ...target.referenceImage, id: target.referenceImage.id || uid() }] : []
+    const remaining = Math.max(0, 8 - existing.length)
+    if (!remaining) { alert('补充参考图片最多 8 张，当前卡片已满。'); return }
+    setAddingCanvasReferences(true)
+    try {
+      const additions = []
+      let skippedDuplicates = 0
+      for (const element of selectedCanvasImages) {
+        const canvasFile = canvasFileFor(element.fileId)
+        const duplicate = [...existing, ...additions].some((reference) =>
+          reference.canvasElementId === element.id ||
+          (reference.fileId && reference.fileId === element.fileId) ||
+          (canvasFile?.assetId && reference.assetId === canvasFile.assetId)
+        )
+        if (duplicate) { skippedDuplicates += 1; continue }
+        if (additions.length >= remaining) break
+        const source = await readOriginalFile(element.fileId)
+        if (!source?.dataURL) throw new Error('无法读取所选画布图片')
+        const referenceId = uid()
+        const preview = await makeCanvasDisplayFile({ id: referenceId, dataURL: source.dataURL, name: '画布图片', mimeType: source.mimeType || 'image/png' })
+        additions.push({
+          id: referenceId,
+          fileId: element.fileId,
+          assetId: source.assetId || canvasFile?.assetId,
+          canvasElementId: element.id,
+          dataURL: preview.dataURL,
+          name: '画布图片',
+          mimeType: preview.mimeType || source.mimeType || 'image/png',
+          role: '补充参考',
+        })
+      }
+      const latestTarget = (sceneRef.current.workflowNodes || []).find((node) => node.id === targetId && node.kind === 'modify')
+      if (!latestTarget) return
+      const latestExisting = latestTarget.referenceImages?.length
+        ? latestTarget.referenceImages
+        : latestTarget.referenceImage ? [{ ...latestTarget.referenceImage, id: latestTarget.referenceImage.id || uid() }] : []
+      const latestRemaining = Math.max(0, 8 - latestExisting.length)
+      const finalAdditions = additions.filter((reference) => !latestExisting.some((item) => item.canvasElementId === reference.canvasElementId || item.fileId === reference.fileId || (item.assetId && item.assetId === reference.assetId))).slice(0, latestRemaining)
+      if (!finalAdditions.length) {
+        alert(skippedDuplicates ? '选中的图片已在补充参考图片中。' : '选中的图片没有可加入的内容。')
+        return
+      }
+      recordNodeHistory()
+      updateWorkflowNode(targetId, { referenceImages: [...latestExisting, ...finalAdditions], referenceImage: null, error: '', generationError: '' })
+      if (finalAdditions.length < selectedCanvasImages.length - skippedDuplicates) alert('补充参考图片最多 8 张，已加入可用图片。')
+    } catch (error) {
+      alert('添加参考图片失败：' + errorMessage(error))
+    } finally {
+      setAddingCanvasReferences(false)
+    }
+  }
   const removeNodeImage = (id, imageId) => {
     const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === id)
     updateWorkflowNode(id, { referenceImages: (node?.referenceImages || []).filter((image) => image.id !== imageId), referenceImage: null })
   }
   const runNode = async (node, modification = false) => {
     const file = sourceFileForNode(node)
-    if (!file || node.busy) return
+    if (node.busy) return
+    if (!file && node.kind === 'modify' && modification) {
+      if (!node.instruction?.trim()) { alert('请先填写修改要求。'); return }
+      const previousOutput = node.output || ''
+      const history = previousOutput ? [...(node.versionHistory || []), { id: uid(), prompt: previousOutput, model: node.model, templateId: node.templateId, templateLabel: node.templateLabel, createdAt: Date.now() }].slice(-20) : (node.versionHistory || [])
+      updateWorkflowNode(node.id, { busy: true, status: 'running', error: '', generationError: '', versionHistory: history })
+      try {
+        const template = aiStatus?.promptTemplates?.find((item) => item.id === node.templateId)
+        const contextPrompt = [`原版提示词：\n${node.prompt}`, template?.content ? `提示词模板要求：\n${template.content}` : ''].filter(Boolean).join('\n\n')
+        const referenceImage = node.referenceImages?.find((image) => image?.dataURL)?.dataURL || node.referenceImage?.dataURL || null
+        const result = await invoke('prompt_assistant', { message: `请严格按照以下修改要求改写原提示词，保留未要求修改的画面设定，输出修改后的完整中文生图提示词，不要解释或添加标题。\n\n修改要求：\n${node.instruction}`, contextPrompt, imageDataUrl: referenceImage })
+        const output = result.text || ''
+        if (!output.trim()) throw new Error('模型没有返回可用提示词。')
+        updateWorkflowNode(node.id, { busy: false, status: 'completed', error: '', output, outputInstruction: node.instruction || '', outputTemplateId: node.templateId || '', outputSourcePrompt: node.prompt || '', model: result.model || node.model })
+        return output
+      } catch (error) {
+        updateWorkflowNode(node.id, { busy: false, status: 'failed', error: errorMessage(error, '提示词修改失败，请检查模型设置后重试。') })
+      }
+      return
+    }
+    if (!file) return
     const previousOutput = modification ? (node.output || '') : (node.prompt || '')
     const history = previousOutput ? [...(node.versionHistory || []), { id: uid(), prompt: previousOutput, model: node.model, templateId: node.templateId, templateLabel: node.templateLabel, createdAt: Date.now() }].slice(-20) : (node.versionHistory || [])
     updateWorkflowNode(node.id, { busy: true, status: 'running', error: '', generationError: '', versionHistory: history })
@@ -2301,8 +3168,20 @@ function App() {
       const references = node.referenceImages || (node.referenceImage ? [node.referenceImage] : [])
       const roles = references.map((image, index) => `参考图${index + 1}用途：${image.role || '补充参考'}`).join('；')
       const instruction = modification ? [node.instruction, roles].filter(Boolean).join('\n') : null
+      const reverseSkillId = node.reverseMethodType === 'skill' ? node.reverseSkillId : (!node.reverseMethodType && node.templateId === 'reverse-image-prompt-glm4v' ? node.templateId : '')
+      if (!modification && node.kind === 'prompt' && reverseSkillId) {
+        const skill = skills.find((item) => item.id === reverseSkillId)
+        if (!skill) throw new Error('找不到所选反推 Skill，请刷新 Skill 库后重试。')
+        const imageDataUrl = await composeVisionReferences(file, references)
+        const result = await invoke('run_skill', { request: { skillId: skill.id, projectId: activeProjectId, contextPrompt: '请根据所附图片反推完整的中文生图提示词，只输出提示词正文。', imageDataUrl, contextSummary: '当前任务：根据所选图片反推可复用的完整生图提示词。' } })
+        const prompt = result.text || ''
+        if (!prompt.trim()) throw new Error('所选 Skill 没有返回可用提示词。')
+        updateWorkflowNode(node.id, { busy: false, status: 'completed', error: '', prompt, model: result.model || node.model, reverseMethodType: 'skill', reverseSkillId: skill.id, templateLabel: skill.name, generationTextOnly: true })
+        refreshSkills()
+        return prompt
+      }
       const result = await invoke('reverse_image_prompt', { imageDataUrl: await composeVisionReferences(file, references), templateId: node.templateId || null, originalPrompt: modification ? node.prompt : null, instruction })
-      updateWorkflowNode(node.id, modification ? { busy: false, status: 'completed', error: '', output: result.prompt, outputInstruction: node.instruction || '', outputTemplateId: result.templateId || node.templateId || '', outputSourcePrompt: node.prompt || '', model: result.model, templateId: result.templateId, templateLabel: result.templateLabel } : { busy: false, status: 'completed', error: '', prompt: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel, generationTextOnly: true })
+      updateWorkflowNode(node.id, modification ? { busy: false, status: 'completed', error: '', output: result.prompt, outputInstruction: node.instruction || '', outputTemplateId: result.templateId || node.templateId || '', outputSourcePrompt: node.prompt || '', model: result.model, templateId: result.templateId, templateLabel: result.templateLabel } : { busy: false, status: 'completed', error: '', prompt: result.prompt, model: result.model, templateId: result.templateId, templateLabel: result.templateLabel, reverseMethodType: 'template', reverseSkillId: '', generationTextOnly: true })
       return result.prompt || ''
     } catch (error) { updateWorkflowNode(node.id, { busy: false, status: 'failed', error: errorMessage(error, '图片处理失败，请删除后重新上传参考图') }) }
   }
@@ -2314,18 +3193,42 @@ function App() {
       const result = await invoke('reverse_image_prompt', { imageDataUrl: compressed, templateId: selectedTemplateId || null })
       setReversePrompt(result.prompt || '')
       setAiStatus((previous) => ({ ...previous, model: result.model, configured: true }))
-      const nodeId = addPromptNode(result.prompt || '', result.model || aiStatus?.model || '当前模型', 'reverse', selected, { id: result.templateId, label: result.templateLabel }, null, { generationTextOnly: true })
-      if (nodeId) setSelectedNodeIds([nodeId])
+      const nodeId = addPromptNode(result.prompt || '', result.model || aiStatus?.model || '当前模型', 'reverse', selected, { id: result.templateId, label: result.templateLabel }, null, { generationTextOnly: true, reverseMethodType: 'template' })
+      if (nodeId) setManuallySelectedWorkflowNodes([nodeId])
       if (result.prompt) {
         saveChat([...chatMessages, { id: uid(), role: 'assistant', text: result.prompt, model: result.model || aiStatus?.model || '当前模型', isPrompt: true, source: 'reverse', linkedToNode: Boolean(nodeId), templateId: result.templateId, templateLabel: result.templateLabel, createdAt: Date.now(), nodeId: nodeId || null }])
-        setGenerationHistoryOpen(true)
       }
       setSelectedImageMoreOpen(false)
     } catch (error) {
       const message = errorMessage(error, '图片反推失败，请检查服务设置后重试。')
       setReverseError(message)
       saveChat([...chatMessages, { id: uid(), role: 'error', text: message, source: 'reverse', createdAt: Date.now() }])
-      setGenerationHistoryOpen(true)
+    } finally { setReverseBusy(false) }
+  }
+  const runReverseSkill = async () => {
+    if (!selectedFile || reverseBusy) return
+    setReverseBusy(true); setReverseError(''); setReversePrompt('')
+    try {
+      const availableSkills = await invoke('list_skills').catch(() => skills)
+      const skill = (availableSkills || []).find((item) => item.id === 'reverse-image-prompt-glm4v')
+      if (!skill) throw new Error('找不到自动识别反推 Skill，请刷新 Skill 库后重试。')
+      if (Array.isArray(availableSkills)) setSkills(availableSkills)
+      const imageDataUrl = await composeVisionReferences(selectedFile)
+      const result = await invoke('run_skill', { request: { skillId: skill.id, projectId: activeProjectId, contextPrompt: '请根据所附图片反推完整的中文生图提示词，只输出提示词正文。', imageDataUrl, contextSummary: '当前任务：根据所选图片反推可复用的完整生图提示词。' } })
+      const prompt = result.text || ''
+      if (!prompt.trim()) throw new Error('自动识别反推 Skill 没有返回可用提示词。')
+      const model = result.model || aiStatus?.model || '当前模型'
+      setReversePrompt(prompt)
+      setAiStatus((previous) => ({ ...previous, model: result.model || previous?.model, configured: true }))
+      const nodeId = addPromptNode(prompt, model, 'reverse', selected, { id: skill.id, label: skill.name }, null, { generationTextOnly: true, reverseMethodType: 'skill', reverseSkillId: skill.id })
+      if (nodeId) setManuallySelectedWorkflowNodes([nodeId])
+      saveChat([...chatMessages, { id: uid(), role: 'assistant', text: prompt, model, isPrompt: true, source: 'reverse', linkedToNode: Boolean(nodeId), skillId: skill.id, templateId: skill.id, templateLabel: `Skill · ${skill.name}`, createdAt: Date.now(), nodeId: nodeId || null }])
+      setSelectedImageMoreOpen(false)
+      void refreshSkills()
+    } catch (error) {
+      const message = errorMessage(error, '自动识别反推失败，请检查 Skill 和服务设置后重试。')
+      setReverseError(message)
+      saveChat([...chatMessages, { id: uid(), role: 'error', text: message, source: 'reverse', createdAt: Date.now() }])
     } finally { setReverseBusy(false) }
   }
   const saveReversePrompt = async () => {
@@ -2366,7 +3269,7 @@ function App() {
     const generation = selected?.customData?.generation || {}
     const nodeId = addPromptNode(prompt, generation.model || imageService.model || aiStatus?.model || '当前模型', 'reverse', selected, null)
     const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
-    if (node) setSelectedNodeIds([node.id])
+    if (node) setManuallySelectedWorkflowNodes([node.id])
     return node
   }
   const resolveMultiAngleNode = async () => {
@@ -2379,7 +3282,7 @@ function App() {
       const prompt = '同一张输入图片的视角变体；原图中的人物、产品、动作、结构、背景、光线和空间关系都是事实，只改变后续指定的摄像机位置、透视和取景。'
       const nodeId = addPromptNode(prompt, imageService.model || aiStatus?.model || '当前图像模型', 'reverse', selected, { id: 'image-angle', label: '原图多角度编辑' })
       const node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
-      if (node) setSelectedNodeIds([node.id])
+      if (node) setManuallySelectedWorkflowNodes([node.id])
       return node
     } finally {
       setMultiAnglePreparing(false)
@@ -2447,7 +3350,7 @@ function App() {
         const nodeId = addPromptNode(basePrompt, baseModel, 'reverse', selected, null)
         node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
         if (!node) throw new Error('快速编辑节点创建失败，请重试。')
-        setSelectedNodeIds([node.id])
+        setManuallySelectedWorkflowNodes([node.id])
       }
       const editInstruction = `【局部编辑】只修改用户明确点名的区域或对象，未点名的内容必须保持原图不变。用户编辑要求：${quickEditText.trim()}`
       const currentMessages = [...chatMessages, { id: uid(), role: 'user', text: `快速编辑：${quickEditText.trim()}`, source: 'quick-edit', createdAt: Date.now(), nodeId: node.id }, { id: uid(), role: 'assistant', text: editInstruction, model: baseModel, isPrompt: true, source: 'quick-edit', linkedToNode: false, templateLabel: '局部编辑指令', createdAt: Date.now(), nodeId: node.id }]
@@ -2483,7 +3386,7 @@ function App() {
         const nodeId = addPromptNode(basePrompt, baseModel, 'reverse', selected, null)
         node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
         if (!node) throw new Error('文字编辑节点创建失败，请重试。')
-        setSelectedNodeIds([node.id])
+        setManuallySelectedWorkflowNodes([node.id])
       }
        const editInstruction = `【文字局部编辑】只把下面列出的原文字替换成目标文字：\n${editRequest}\n【文字框几何锁定】每段文字的左上角、右下角、占用宽高、行数、基线和对齐方式必须与原图完全一致，目标文字必须完整落在同一个原文字框内；禁止因为目标文字变长而放大字号、扩大文字框、改变换行或挤压周围内容，必要时只在原文字框内部压缩字距或字宽。保持原来的字体风格、字号、颜色、透视、遮挡、边缘和光照关系。文字框以外的像素必须保持原图不变；禁止修改人物动作、产品结构、背景、天空、地面、构图、光线或其他未列出的内容。不要重排版，不要新增文字，不要删除其他文字。`
       const currentMessages = [...chatMessages, { id: uid(), role: 'user', text: `编辑文字：${editRequest}`, source: 'text-edit', createdAt: Date.now(), nodeId: node.id }, { id: uid(), role: 'assistant', text: editInstruction, model: baseModel, isPrompt: true, source: 'text-edit', linkedToNode: false, templateLabel: '文字局部编辑指令', createdAt: Date.now(), nodeId: node.id }]
@@ -2545,10 +3448,10 @@ function App() {
     if (missing.length) return alert(`此 Skill 还需要：${missing.map((key) => ({ image: '图片', text: '提示词文本', node: '提示词节点', product: '产品参考图' }[key])).join('、')}`)
     const source = selectedProductElements[0] || selectedCanvasElements.find((element) => element.type === 'image') || (selectedWorkflowNode?.sourceElementId ? sceneRef.current.elements.find((element) => element.id === selectedWorkflowNode.sourceElementId) : null)
     const contextPrompt = (selectedCanvasPrompt || assistantContext || '').trim()
-    const node = { id: uid(), kind: 'skill', sourceElementId: source?.id || null, parentNodeId: selectedWorkflowNode?.id || null, x: source ? source.x + source.width + 150 : 160, y: source ? source.y : 160, width: 620, height: 500, model: aiStatus?.model || '', prompt: contextPrompt, output: '', busy: true, status: 'running', skillId: skill.id, skillVersion: skill.version, skillName: skill.name, skillOutputType: skill.outputType, skillRequires: skill.requires || [], referenceImages: selectedProductReferences, versionHistory: [], ...GENERATION_DEFAULTS }
+    const node = { id: uid(), kind: 'skill', sourceElementId: source?.id || null, parentNodeId: selectedWorkflowNode?.id || null, x: source ? source.x + source.width + 150 : 160, y: source ? source.y : 160, width: 620, height: 500, model: aiStatus?.model || '', prompt: contextPrompt, output: '', busy: true, status: 'running', skillId: skill.id, skillVersion: skill.version, skillName: skill.name, skillOutputType: skill.outputType, skillRequires: skill.requires || [], referenceImages: selectedProductReferences, versionHistory: [], ...GENERATION_DEFAULTS, generationTextOnly: skill.outputType === 'prompt' }
     recordNodeHistory()
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
-    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setSelectedNodeIds([node.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes([node.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
     try {
       const imageDataUrl = selectedFile?.dataURL || selectedProductReferences[0]?.dataURL || null
       const summary = `已选图片：${skillContext.image ? '是' : '否'}；已选文本：${skillContext.text ? '是' : '否'}；当前节点：${selectedWorkflowNode?.kind || '无'}；产品参考图：${selectedProductReferences.length} 张。`
@@ -2617,7 +3520,7 @@ function App() {
           const generationCount = generation.count || assistantGenerationSettings.generationCount
           generationNode = { id: uid(), kind: 'prompt', sourceElementId: null, parentNodeId: null, x: -(viewportRef.current.scrollX || 0) + 180 / zoom, y: -(viewportRef.current.scrollY || 0) + 160 / zoom, width: 620, height: 560, model: result.model || 'Mimo Agent', templateId: 'agent', templateLabel: 'Agent 最终方案', prompt: finalPrompt, instruction: '', output: '', busy: false, status: 'completed', referenceImages: [], versionHistory: [], ...GENERATION_DEFAULTS, generationAspect, generationQuality, generationCount, productConsistency: false }
           const nodes = [...(sceneRef.current.workflowNodes || []), generationNode]
-          sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setSelectedNodeIds([generationNode.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+          sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes([generationNode.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
         }
         generatePreview(generationNode, selectedEditImage ? { mode: 'quick-edit', editInstruction: generationNode.prompt, preserveSourceDimensions: true } : {})
         return
@@ -2632,7 +3535,7 @@ function App() {
           const nodeId = addPromptNode(manualPrompt, '手动提示词', 'reverse', selected, { id: 'manual', label: '手动输入' })
           generationNode = (sceneRef.current.workflowNodes || []).find((node) => node.id === nodeId)
           if (!generationNode) throw new Error('手动提示词节点创建失败，请重试。')
-          setSelectedNodeIds([nodeId])
+          setManuallySelectedWorkflowNodes([nodeId])
         }
         generationNode = { ...generationNode, generationAspect: generation.aspect, generationQuality: generation.quality, generationCount: generation.count }
         updateWorkflowNode(generationNode.id, { generationAspect: generation.aspect, generationQuality: generation.quality, generationCount: generation.count })
@@ -2679,7 +3582,7 @@ function App() {
     const zoom = viewportRef.current.zoom?.value || viewportRef.current.zoom || 1
     const node = { id: uid(), kind: 'skill', sourceElementId: source?.id || null, parentNodeId: null, x: source ? source.x + source.width + 160 : -(viewportRef.current.scrollX || 0) + 180 / zoom, y: source ? source.y : -(viewportRef.current.scrollY || 0) + 160 / zoom, width: 620, height: 560, model: message.model || 'Mimo', skillName: '文档作图任务卡', skillOutputType: 'analysis', skillRequires: ['document'], prompt: '', output: message.text, busy: false, status: 'completed', templateId: '', templateLabel: '项目文档任务卡', documentIds: projectDocuments.filter((doc) => doc.enabled).map((doc) => doc.id), referenceImages: [], versionHistory: [], ...GENERATION_DEFAULTS }
     const nodes = [...(sceneRef.current.workflowNodes || []), node]
-    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setSelectedNodeIds([node.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
+    sceneRef.current = { ...sceneRef.current, workflowNodes: nodes }; setWorkflowNodes(nodes); setManuallySelectedWorkflowNodes([node.id]); persist(sceneRef.current.elements, sceneRef.current.appState || emptyScene.appState, sceneRef.current.files, nodes)
   }
   const saveImageService = async () => {
     setImageServiceMessage('正在保存…')
@@ -2725,7 +3628,7 @@ function App() {
     updateWorkflowNode(node.id, { generatedElementIds: [...(currentNode.generatedElementIds || []), elementId], generationModel: taskMeta.model || imageService.model })
     api.current?.updateScene({ appState: { selectedElementIds: { [elementId]: true } } })
     api.current?.scrollToContent([element], { fitToViewport: true, viewportZoomFactor: 0.72 })
-    setSelected({ ...element, file: displayFile }); setSelectedCanvasIds([elementId]); setSelectedNodeIds([node.id])
+    setSelected({ ...element, file: displayFile }); setSelectedCanvasIds([elementId]); setManuallySelectedWorkflowNodes([node.id])
   }
   const cancelGeneration = async (node) => {
     const current = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id)
@@ -2789,7 +3692,7 @@ function App() {
       const nodeId = addPromptNode(message.text, message.model || aiStatus?.model || '当前模型', 'reverse', selected, null, null, nodeOptions)
       node = (sceneRef.current.workflowNodes || []).find((item) => item.id === nodeId) || null
       if (!node) return
-      setSelectedNodeIds([node.id])
+      setManuallySelectedWorkflowNodes([node.id])
     }
     await generateAssistantPreview(node, message.text, { mode: 'normal', ...options })
   }
@@ -2813,6 +3716,10 @@ function App() {
       const count = Math.max(1, Math.min(4, Number(generationNode.generationCount || GENERATION_DEFAULTS.generationCount))), requestedSize = GENERATION_SIZES[quality]?.[aspect] || '2048x1152', size = GENERATION_COMPATIBLE_SIZES[aspect] || '1792x1024'
     const generationModel = generationModelFor(imageService.model, quality)
     const runId = uid(), startedAt = Date.now()
+    const generationAccountId = activeAccount?.id
+    const generationAccountName = activeAccount?.name || ''
+    const generationProjectId = activeProjectRef.current
+    const generationProjectName = projects.find((item) => item.id === generationProjectId)?.name || '画布项目'
     generationRunsRef.current.set(node.id, runId)
     const active = () => generationRunsRef.current.get(node.id) === runId
     const cancelError = () => Object.assign(new Error('已取消生图'), { cancelled: true })
@@ -2893,12 +3800,20 @@ function App() {
         return { preparationMs, submitMs: average('submitMs'), serverMs: average('serverMs'), downloadMs: average('downloadMs'), taskCount: taskTimings.length }
       }
       const pollDelay = (attempt) => attempt < 3 ? 1200 : attempt < 10 ? 2200 : 3500
+      let unknownCount = 0
       const generateOne = async (resultIndex) => {
         let taskId = null
+        const eventId = uid()
+        const recordGeneration = (status) => {
+          if (!generationAccountId) return
+          try { saveLocalGenerationEvent({ id: eventId, accountId: generationAccountId, accountName: generationAccountName, projectId: generationProjectId, projectName: generationProjectName, createdAt: startedAt, finishedAt: status === 'pending' ? null : Date.now(), status, model: generationModel, quality, aspect: requestAspect, requestedSize: requestRequestedSize, taskId }) }
+          catch (error) { console.warn('本机生图统计保存失败', error) }
+        }
+        recordGeneration('pending')
         try {
           updateActive({ generationStatus: `正在提交 ${submittedCount + 1}/${count} · 已完成 ${completedCount}/${count}` })
           const submitStartedAt = Date.now()
-           let task = await invoke('submit_generation', { request: { prompt: generationPrompt, size: requestSize, requestedSize: requestRequestedSize, aspectRatio: requestAspect, imageSize: quality, model: generationModel, imageDataUrl: editImageDataUrl, maskDataUrl: editMaskDataUrl, referenceImages: requestReferenceImages } })
+           let task = await invoke('submit_generation', { request: { prompt: generationPrompt, size: requestSize, requestedSize: requestRequestedSize, aspectRatio: requestAspect, imageSize: quality, model: generationModel, imageDataUrl: textOnlyRun ? null : editImageDataUrl, maskDataUrl: textOnlyRun ? null : editMaskDataUrl, referenceImages: textOnlyRun ? [] : requestReferenceImages } })
           const submittedAt = Date.now()
           taskId = task.taskId || null
           if (!active()) { if (taskId) invoke('cancel_generation', { taskId }).catch(() => {}); throw cancelError() }
@@ -2924,15 +3839,19 @@ function App() {
           const finishedImageAt = Date.now()
           taskTimings.push({ submitMs: submittedAt - submitStartedAt, serverMs: downloadStartedAt - submittedAt, downloadMs: finishedImageAt - downloadStartedAt })
           completedCount += 1
+          recordGeneration('success')
           if (taskId) taskIds.delete(taskId)
           updateActive({ generationTaskIds: [...taskIds], generationCompletedCount: completedCount, generationTiming: summarizeTiming(), generationStatus: `已提交 ${submittedCount}/${count} · 已完成 ${completedCount}/${count}` })
         } catch (error) {
-          if (error?.cancelled) throw error
-          failedCount += 1
-          if (taskId) taskIds.delete(taskId)
+          if (error?.cancelled) { recordGeneration('cancelled'); throw error }
           const detail = errorMessage(error, '请重试')
+          const submissionUnknown = detail.includes('任务提交状态待核查')
+          recordGeneration(submissionUnknown ? 'unknown' : 'failed')
+          failedCount += 1
+          if (submissionUnknown) unknownCount += 1
+          if (taskId) taskIds.delete(taskId)
           failureDetails.push(detail)
-          updateActive({ generationTaskIds: [...taskIds], generationFailedCount: failedCount, generationStatus: `已提交 ${submittedCount}/${count} · 已完成 ${completedCount}/${count} · 失败 ${failedCount}`, generationError: `${failedCount} 张生成失败：${failureDetails.join('；')}` })
+          updateActive({ generationTaskIds: [...taskIds], generationFailedCount: failedCount, generationStatus: submissionUnknown ? `提交状态待核查 · 已完成 ${completedCount}/${count}` : `已提交 ${submittedCount}/${count} · 已完成 ${completedCount}/${count} · 失败 ${failedCount}`, generationError: failureDetails.join('；') })
         }
       }
       const workerCount = Math.min(2, count)
@@ -2946,7 +3865,7 @@ function App() {
       await Promise.all(workers)
       ensureActive()
       const finishedAt = Date.now()
-      updateActive({ generationBusy: false, generationStatus: failedCount ? `已完成 ${completedCount}/${count} · ${failedCount} 张失败` : `已完成 ${completedCount}/${count}`, generationTaskId: null, generationTaskIds: [], generationCompletedCount: completedCount, generationFailedCount: failedCount, generationFinishedAt: finishedAt, generationElapsedMs: finishedAt - startedAt, generationTiming: summarizeTiming(), generationError: failedCount ? `${failedCount} 张未生成成功：${failureDetails.join('；') || '服务端没有返回具体原因'}` : '', generationModel })
+      updateActive({ generationBusy: false, generationStatus: failedCount ? `已完成 ${completedCount}/${count} · ${unknownCount ? `${unknownCount} 张待核查` : ''}${failedCount > unknownCount ? ` ${failedCount - unknownCount} 张失败` : ''}` : `已完成 ${completedCount}/${count}`, generationTaskId: null, generationTaskIds: [], generationCompletedCount: completedCount, generationFailedCount: failedCount, generationFinishedAt: finishedAt, generationElapsedMs: finishedAt - startedAt, generationTiming: summarizeTiming(), generationError: failedCount ? failureDetails.join('；') || '服务端没有返回具体原因' : '', generationModel })
     } catch (error) {
       if (active() && !error?.cancelled) { const finishedAt = Date.now(); updateWorkflowNode(node.id, { generationBusy: false, generationStatus: 'failed', generationTaskId: null, generationFinishedAt: finishedAt, generationElapsedMs: finishedAt - startedAt, generationError: errorMessage(error, '图像生成失败，请重试') }) }
     } finally { if (active()) generationRunsRef.current.delete(node.id) }
@@ -2988,7 +3907,7 @@ function App() {
     x: Math.min(bounds.x, element.x), y: Math.min(bounds.y, element.y),
   }), { x: Infinity, y: Infinity })
   const selectedPromptToolbarPosition = selectedCanvasPrompt && selectedPromptElements.length ? {
-    left: Math.max(12, Math.min((selectedPromptBounds.x + (viewport.scrollX || 0)) * (viewport.zoom || 1), Math.max(12, (boardRef.current?.clientWidth || 720) - 310))),
+    left: Math.max(12, Math.min((selectedPromptBounds.x + (viewport.scrollX || 0)) * (viewport.zoom || 1), Math.max(12, (boardRef.current?.clientWidth || 720) - 620))),
     top: Math.max(54, (selectedPromptBounds.y + (viewport.scrollY || 0)) * (viewport.zoom || 1) - 48 + (selectedImageToolbarPosition ? 52 : 0)),
   } : null
   const openPromptVault = () => {
@@ -3039,6 +3958,8 @@ function App() {
     }
   }
 
+  if (!activeAccount) return <LocalAccountGate onLogin={(account) => setActiveAccount(account)} />
+
   return <div className={`app ${canvasTheme === 'light' ? 'light-theme' : ''}`}>
     <header className="bar">
       <span className="brand-logo" title="阿男帮你推" data-tauri-drag-region><img src="/canvas-logo.svg" alt="" /></span>
@@ -3055,7 +3976,7 @@ function App() {
         <button type="button" className="window-close" title="关闭" aria-label="关闭" onClick={() => controlNativeWindow('close')}><img src="/ui-icons/window-close.svg" alt="" /></button>
       </div>
     </header>
-    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 1.4.9{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
+    {updateDialogOpen && <div className="app-update-backdrop" onMouseDown={() => !updateInstalling && setUpdateDialogOpen(false)}><section className="app-update-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><small>安全更新</small><h2>{appUpdate ? `发现新版本 ${appUpdate.version}` : '检查更新失败'}</h2></div><button disabled={updateInstalling} onClick={() => setUpdateDialogOpen(false)}>×</button></header>{appUpdate && <><p className="app-update-date">当前版本 {APP_VERSION}{appUpdate.date ? ` · 发布于 ${new Date(appUpdate.date).toLocaleString()}` : ''}</p><div className="app-update-notes">{appUpdate.body || '本次版本包含功能优化与问题修复。'}</div></>}{updateProgress && <div className="app-update-progress"><div style={{ width: `${updateProgress.percent || 0}%` }} /><span>{updateProgress.label}</span></div>}{updateError && <p className="app-update-error">{updateError}</p>}<footer>{!updateInstalling && <button onClick={() => setUpdateDialogOpen(false)}>稍后提醒</button>}{appUpdate && <button className="primary" disabled={updateInstalling} onClick={installAppUpdate}>{updateInstalling ? '正在更新…' : '一键升级并安装'}</button>}{!appUpdate && <button className="primary" onClick={checkAppUpdate}>重新检查</button>}</footer><small className="app-update-security">更新包来自官方 GitHub Releases，并在安装前验证数字签名。</small></section></div>}
     {vaultLoaded && <iframe className={`vault-frame ${mode === 'prompts' ? 'active' : ''}`} title="提示词库" src="/prompt-vault.html" />}
     <main className={`${mode === 'prompts' ? 'canvas-hidden' : ''}`}>
       <aside className={`projects ${drawerOpen ? '' : 'collapsed'}`}>
@@ -3070,7 +3991,11 @@ function App() {
   <footer className="backup-panel-footer">备份文件仍保存在本机</footer>
 </section>}<div className="project-list">{projects.map((project) => <div key={project.id} className={`project-row ${project.id === activeProjectId ? 'active' : ''} ${projectLoad?.projectId === project.id ? 'loading' : ''}`} onClick={() => selectProject(project.id)} onDoubleClick={() => renameProject(project)}><span>{project.name}{project.skillTraining ? ' · 训练' : ''}{projectLoad?.projectId === project.id ? ` · ${projectLoad.total ? `${projectLoad.loaded}/${projectLoad.total}` : '打开中'}` : ''}</span><button className="project-row-delete" title="删除项目" aria-label="删除项目" onClick={(event) => { event.stopPropagation(); deleteProject(project) }}><img src="/ui-icons/window-close.svg" alt="" /></button></div>)}</div></div>}
       </aside>
-      <section ref={boardRef} className="board" onPasteCapture={pasteCanvasPrompt} onDragEnterCapture={allowImageDrop} onDragOverCapture={allowImageDrop} onDropCapture={importDroppedImages}>
+      <section ref={boardRef} className="board" onPointerDownCapture={(event) => {
+        if (event.shiftKey || event.target.closest?.('.workflow-node, .workflow-selection-bar, .generated-image-toolbar, .asset-library-drawer, .asset-library-trigger, .skill-library-canvas, .fit-canvas')) return
+        manuallySelectedWorkflowNodeIdsRef.current = []
+        setSelectedNodeIds(workflowNodes.filter((node) => selectedCanvasIds.includes(node.sourceElementId)).map((node) => node.id))
+      }} onPasteCapture={pasteCanvasPrompt} onDragEnterCapture={allowImageDrop} onDragOverCapture={allowImageDrop} onDropCapture={importDroppedImages}>
         {projectLoad?.projectId === activeProjectId && <div className="project-load-status" role="status">{projectLoad.total ? `图片加载中 ${projectLoad.loaded}/${projectLoad.total}，画布已可操作` : '正在打开项目…'}</div>}
         <button className="skill-library-canvas" title="Skill 库" onClick={() => setSkillLibraryOpen(true)}>Skill</button><button className="asset-library-trigger" title="项目素材" aria-expanded={assetDrawerOpen} onClick={() => { setAssetDrawerOpen((value) => !value); if (!assetDrawerOpen) { void syncSelectedFileToAssets().finally(() => refreshProjectAssets()) } }}>素材</button>
         {assetDrawerOpen && <aside className="asset-library-drawer" aria-label="项目素材">
@@ -3090,12 +4015,19 @@ function App() {
           })}{!projectAssets.length && <div className="asset-library-empty">本项目还没有素材。导入图片、插件发送图片和生图结果会自动收录到这里。</div>}</div>
         </aside>}
 
+        <button className={`fit-canvas auto-arrange-canvas ${canvasSearchOpen ? 'search-open' : ''}`} title="按图片、提示词卡片和生成结果的关联自动整理画布" aria-label="自动整理画布" onMouseDown={(event) => event.preventDefault()} onClick={autoArrangeCanvas}>自动整理</button>
         <button className={`fit-canvas ${canvasSearchOpen ? 'search-open' : ''}`} onMouseDown={(event) => event.preventDefault()} onClick={() => api.current?.scrollToContent(sceneRef.current.elements, { fitToViewport: true, viewportZoomFactor: 0.85 })}>查看全部</button>
         {selectedPromptToolbarPosition && <div className="generated-image-toolbar prompt-text-toolbar" style={selectedPromptToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
           <span>仅使用所选文字</span>
-          <button className="primary" title="仅发送所选提示词，不发送画布图片或参考图" onClick={generateSelectedCanvasText} disabled={canvasTextGenerationBusy}>{canvasTextGenerationBusy ? '正在生成…' : '✦ 纯提示词生图'}</button>
+          <div className="prompt-text-generation-settings" role="group" aria-label="纯提示词生图参数">
+            <label><span>比例</span><select aria-label="纯提示词生图比例" value={canvasTextGenerationSettings.generationAspect} onChange={(event) => setCanvasTextGenerationSettings((current) => ({ ...current, generationAspect: event.target.value }))}>{GENERATION_ASPECTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>清晰度</span><select aria-label="纯提示词生图清晰度" value={canvasTextGenerationSettings.generationQuality} onChange={(event) => setCanvasTextGenerationSettings((current) => ({ ...current, generationQuality: event.target.value }))}>{['1K', '2K', '4K'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>张数</span><select aria-label="纯提示词生图张数" value={canvasTextGenerationSettings.generationCount} onChange={(event) => setCanvasTextGenerationSettings((current) => ({ ...current, generationCount: Number(event.target.value) }))}>{[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value}张</option>)}</select></label>
+          </div>
+          <button type="button" title="创建提示词修改卡片" onClick={createSelectedPromptModifyNode}>提示词修改</button>
+          <button type="button" className="primary" title="仅发送所选提示词，不发送画布图片或参考图" onClick={generateSelectedCanvasText} disabled={canvasTextGenerationBusy}>{canvasTextGenerationBusy ? '正在生成…' : '✦ 纯提示词生图'}</button>
         </div>}
-        {selectedNodeIds.length > 0 && <div className="workflow-selection-bar node-selection-toolbar" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }}><b className="workflow-selection-count">已选{selectedNodeIds.length}个节点</b><button type="button" onClick={duplicateSelectedWorkflowNodes}>复制</button><button type="button" onClick={collapseSelected}>折叠/展开</button><button type="button" onClick={connectSelectedToImage}>连接图片</button><button type="button" onClick={deleteSelectedWorkflowNodes}>删除</button></div>}
+        {selectedNodeIds.length > 0 && <div className={'workflow-selection-bar node-selection-toolbar' + (canAddSelectedImagesToModify ? ' has-reference-action' : '')} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }}><b className="workflow-selection-count">已选{selectedNodeIds.length}个节点</b><button type="button" onClick={duplicateSelectedWorkflowNodes}>复制</button><button type="button" onClick={collapseSelected}>折叠/展开</button><button type="button" onClick={connectSelectedToImage}>连接图片</button>{canAddSelectedImagesToModify && <button type="button" onClick={() => void addSelectedCanvasImagesToModify()} disabled={addingCanvasReferences || selectedModifyReferenceCount >= 8} title={selectedModifyReferenceCount >= 8 ? '补充参考图片最多 8 张' : '把所选画布图片加入提示词修改卡片'}>{addingCanvasReferences ? '添加中…' : '加入参考图'}</button>}<button type="button" onClick={deleteSelectedWorkflowNodes}>删除</button></div>}
         {canComposeGeneration && <div className="workflow-selection-bar composition-selection-bar" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }} style={{ top: 64, maxWidth: 'calc(100% - 32px)', whiteSpace: 'nowrap', overflowX: 'auto' }}><button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setCompositionPanelOpen(true) }}>组合生图设置</button><button type="button" className="primary" onClick={(event) => { event.preventDefault(); event.stopPropagation(); generateComposition() }}>用提示词＋产品图生图</button></div>}
         {blenderReferencePair && <div className="workflow-selection-bar" style={{ top: 112, maxWidth: 'calc(100% - 32px)' }}><b>已选 Blender 产品图＋场景参考图</b><button className="primary" onClick={applyReferenceSceneToBlender} disabled={blenderReferenceBusy}>{blenderReferenceBusy ? '正在反推并适配产品…' : '以参考图反推并写入 Blender 卡片'}</button></div>}
         <Excalidraw key={`${activeProjectId}:${canvasInstanceVersion}`} theme={canvasTheme === 'light' ? 'light' : 'dark'} onPaste={(data) => {
@@ -3152,7 +4084,7 @@ function App() {
             if (selectionKey !== canvasSelectionRef.current) {
               canvasSelectionRef.current = selectionKey
               setSelectedCanvasIds(selectedCanvasIds)
-              setSelectedNodeIds((scene.workflowNodes || []).filter((node) => selectedCanvasIds.includes(node.sourceElementId)).map((node) => node.id))
+              setSelectedNodeIds(selectedWorkflowNodeIdsForCanvas(scene.workflowNodes || [], selectedCanvasIds))
               const hit = selectedCanvasIds.length ? elements.find((element) => element.id === selectedCanvasIds[0]) : null
               const file = hit?.fileId ? canvasFileFor(hit.fileId, files[hit.fileId]) : null
               setSelected(hit ? { ...hit, file } : null)
@@ -3190,7 +4122,7 @@ function App() {
           if (selectionKey !== canvasSelectionRef.current) {
             canvasSelectionRef.current = selectionKey
             setSelectedCanvasIds(selectedCanvasIds)
-            setSelectedNodeIds(nodes.filter((node) => selectedCanvasIds.includes(node.sourceElementId)).map((node) => node.id))
+            setSelectedNodeIds(selectedWorkflowNodeIdsForCanvas(nodes, selectedCanvasIds))
           }
           setSelected((previous) => {
             if (!hit) return null
@@ -3200,8 +4132,9 @@ function App() {
         }} UIOptions={{ tools: { diamond: false, ellipse: false }, canvasActions: { loadScene: false, saveToActiveFile: false, export: false, toggleTheme: false } }} validateEmbeddable={() => false} aiEnabled={false}>
 
         </Excalidraw>
-        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} selectedTemplateId={selectedTemplateId} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onModifyAndGenerate={async (node, options = {}) => { const output = await runNode(node, true); if (!output) return; const latestNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; const generationTextOnly = options.textOnly ?? latestNode.generationTextOnly; if (options.textOnly != null) updateWorkflowNode(node.id, { generationTextOnly: options.textOnly }); await generatePreview({ ...latestNode, output, outputInstruction: node.instruction || '', generationTextOnly }, options) }} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
+        <WorkflowNodes nodes={workflowNodes} elements={sceneRef.current.elements || []} viewport={viewport} layerRef={workflowLayerRef} templates={aiStatus?.promptTemplates || []} skills={skills} projectId={activeProjectId} selectedTemplateId={selectedTemplateId} selectedIds={selectedNodeIds} onSelect={selectWorkflowNode} onBeginMove={recordNodeHistory} onMoveMany={moveWorkflowNodes} onRegenerate={runNode} onGenerate={generatePreview} onModifyAndGenerate={async (node, options = {}) => { const output = await runNode(node, true); if (!output) return; const latestNode = (sceneRef.current.workflowNodes || []).find((item) => item.id === node.id) || node; const generationTextOnly = options.textOnly ?? latestNode.generationTextOnly; if (options.textOnly != null) updateWorkflowNode(node.id, { generationTextOnly: options.textOnly }); await generatePreview({ ...latestNode, output, outputInstruction: node.instruction || '', generationTextOnly }, options) }} onCancelGeneration={cancelGeneration} onModify={(node) => { const source = sceneRef.current.elements.find((element) => element.id === node.sourceElementId); if (source) addPromptNode(node.prompt, node.model, 'modify', source, { id: node.templateId, label: node.templateLabel }, node.id) }} onUpdate={updateWorkflowNode} onAttachImage={attachNodeImage} onRemoveImage={removeNodeImage} onDelete={deleteWorkflowNode} onDisconnect={disconnectWorkflowNode} />
          {selectedImageToolbarPosition && <div className="generated-image-toolbar" style={selectedImageToolbarPosition} onPointerDown={(event) => event.stopPropagation()}>
+           <button className={`image-toolbar-auto-reverse ${reverseBusy ? 'is-busy' : ''}`} onClick={runReverseSkill} disabled={reverseBusy || !selectedFile?.dataURL} title={reverseBusy ? '正在使用自动识别 Skill 反推…' : '自动识别反推（Skill）'} aria-label="自动识别反推（Skill）" aria-busy={reverseBusy}><img src="/ui-icons/auto-reverse-skill.svg" alt="" /></button>
            <div className="image-edit-segment" role="group" aria-label="图片编辑方式">
              <button className={quickEditOpen ? 'active' : ''} onClick={openQuickEditForSelection}>快速编辑</button>
              <button className={multiAngleOpen ? 'active' : ''} onClick={openMultiAngleForSelection} disabled={multiAnglePreparing}>{multiAnglePreparing ? '准备中…' : '多角度'}</button>
@@ -3211,10 +4144,10 @@ function App() {
            <div className="image-toolbar-more" ref={selectedImageMoreRef}>
              <button className={`image-toolbar-more-trigger ${selectedImageMoreOpen ? 'active' : ''}`} aria-label="更多图片操作" aria-expanded={selectedImageMoreOpen} title="更多图片操作" onClick={() => setSelectedImageMoreOpen((value) => !value)}>⋯</button>
              {selectedImageMoreOpen && <div className="image-toolbar-more-menu" role="menu">
-               <label className="reverse-template-picker">反推模板<select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>{(aiStatus?.promptTemplates || []).map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select></label>
+               <label className="reverse-template-picker" aria-label="反推提示词模板" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}><span>反推提示词模板</span><select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>{(aiStatus?.promptTemplates || []).map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}</select></label>
                {selected?.customData?.promptNodeId && <button role="menuitem" onClick={() => { void saveGeneratedImageToVault(); setSelectedImageMoreOpen(false) }}>收藏到提示词库</button>}
                <button role="menuitem" onClick={() => { setSkillLibraryOpen(true); setSelectedImageMoreOpen(false) }}>✦ Skill 库</button>
-               <button role="menuitem" onClick={() => { setSelected(null); setSelectedCanvasIds([]); setSelectedNodeIds([]); setSelectedImageMoreOpen(false); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消选择</button>
+               <button role="menuitem" onClick={() => { setSelected(null); setSelectedCanvasIds([]); setWorkflowNodeSelection([]); setSelectedImageMoreOpen(false); api.current?.updateScene({ appState: { selectedElementIds: {} } }) }}>取消选择</button>
              </div>}
            </div>
            {selected?.customData?.promptNodeId && <button className="image-toolbar-download" title="下载原图" aria-label="下载原图" onClick={() => void downloadGeneratedOriginal()}><img src="/ui-icons/inbox-download.svg" alt="" /></button>}
@@ -3287,11 +4220,13 @@ function App() {
       </section>
     </div>}
     {settingsOpen && <div className="image-service-settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
-      <section className="image-service-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsDialogTitle" onMouseDown={(event) => event.stopPropagation()}>
+      <section className={`image-service-settings-dialog ${settingsTab === 'stats' ? 'stats-view' : ''} ${settingsTab === 'model' || settingsTab === 'templates' ? 'ai-view' : ''}`} role="dialog" aria-modal="true" aria-labelledby="settingsDialogTitle" onMouseDown={(event) => event.stopPropagation()}>
         <header className="image-service-settings-header">
           <div className="image-service-settings-title"><img src={settingsSwitchIcon} alt="" /><b id="settingsDialogTitle">设置</b></div>
           <button className="image-service-settings-close" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13"/></svg></button>
         </header>
+        <nav className="image-service-settings-tabs" aria-label="设置窗口"><button type="button" className={settingsTab === 'general' ? 'active' : ''} onClick={() => setSettingsTab('general')}>常规设置</button><button type="button" className={settingsTab === 'model' ? 'active' : ''} onClick={() => setSettingsTab('model')}>推理模型</button><button type="button" className={settingsTab === 'templates' ? 'active' : ''} onClick={() => setSettingsTab('templates')}>提示词模板</button><button type="button" className={settingsTab === 'stats' ? 'active' : ''} onClick={() => setSettingsTab('stats')}>生图统计</button></nav>
+        {settingsTab === 'general' ? <>
         <div className="image-service-settings-overview">
           <section className="settings-font-card">
             <div><label htmlFor="assistantFontScale">对话文字大小</label><output htmlFor="assistantFontScale">{Math.round(assistantFontScale * 100)}%</output></div>
@@ -3311,12 +4246,15 @@ function App() {
               ['editPath', '图生图路径', 'text'], ['statusPath', '任务查询路径（用 {taskId}）', 'text'],
               ['cancelPath', '取消任务路径（用 {taskId}）', 'text'], ['defaultSize', '默认尺寸', 'text'],
             ].map(([key, label, type]) => <label key={key}>{label}<input type={type} title={key === 'apiKey' ? 'API Key；留空保持原密钥' : undefined} placeholder={key === 'apiKey' ? (imageService.hasApiKey ? '留空保持已保存的密钥' : '请输入 API Key') : ''} value={imageService[key] || ''} onChange={(event) => setImageService({ ...imageService, [key]: event.target.value })} /></label>)}
-            <label>接口模式<select value={imageService.mode || 'openai'} onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="openai">OpenAI 兼容 / 通用 JSON</option></select></label>
+            {imageService.baseUrl?.startsWith('https://api.xunkecloud.cn') && imageService.model?.startsWith('nano-banana')
+              ? <label>迅客 Nano 接口<select value={imageService.mode === 'xunke_sync' ? 'xunke_sync' : 'xunke_async'} onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="xunke_async">异步任务 · /v1/images/task（当前默认）</option><option value="xunke_sync">同步生成 · /v1/images/generations</option></select></label>
+              : <label>接口模式<select value="openai" onChange={(event) => setImageService({ ...imageService, mode: event.target.value })}><option value="openai">OpenAI 兼容 / 通用 JSON</option></select></label>}
             <div className="image-service-settings-actions"><button onClick={saveImageService}>保存设置</button><button onClick={testImageService}>连接测试</button></div>
           </div>
         </section>
         {imageServiceMessage && <p className="image-service-settings-feedback" role="status">{imageServiceMessage}</p>}
         <button className="image-service-settings-update" onClick={() => { setSettingsOpen(false); checkAppUpdate() }} disabled={updateChecking}>{updateChecking ? '正在检查…' : '检查更新'}</button>
+        </> : settingsTab === 'stats' ? <PersonalStats account={activeAccount} onSwitchAccount={setActiveAccount} onLogout={() => { logoutLocalAccount(); setSettingsOpen(false); setSettingsTab('general'); setActiveAccount(null) }} /> : <AiSettingsPanel section={settingsTab} status={aiStatus} onSaved={(status) => { aiStatusSignatureRef.current = JSON.stringify(status); setAiStatus(status); setSelectedTemplateId(status.promptTemplateId) }} />}
       </section>
     </div>}
     {skillLibraryOpen && <SkillLibrary skills={skills} context={skillContext} projectId={activeProjectId} onUse={async (skill) => { setSkillLibraryOpen(false); await runSkill(skill) }} onSave={saveSkill} onDelete={deleteSkill} onExport={exportSkills} onImport={importSkills} onClose={() => setSkillLibraryOpen(false)} />}

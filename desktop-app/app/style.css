@@ -35,7 +35,7 @@
 .workflow-layer{contain:layout paint;backface-visibility:hidden}
 .assistant-mode-switch{display:flex;align-items:center;gap:6px;padding:8px 12px 0}.assistant-mode-switch button{border:1px solid #d8cdef;border-radius:999px;background:#fff;color:#635678;padding:5px 12px;cursor:pointer}.assistant-mode-switch button.active{background:#6d28d9;border-color:#6d28d9;color:#fff}.assistant-mode-switch small{margin-left:4px;color:#8a8199;font-size:11px}
 .chat-list article{padding:14px 15px}.chat-list article b{font-size:14px;font-weight:700;color:#cbbcff}.chat-list article time{font-size:12px;color:#aaa6b5}.chat-list article p{font-size:15px;line-height:1.78;color:#ece9f2;margin:10px 0;letter-spacing:.01em}.light-theme .chat-list article{color:#292533}.light-theme .chat-list article b{color:#7955c8}.light-theme .chat-list article time{color:#686273}.light-theme .chat-list article p{color:#403a49}.light-theme .chat-list article.user p{color:#352d43}
-.assistant-detail{--assistant-font-scale:1}.assistant-detail .assistant-title h2{font-size:calc(20px * var(--assistant-font-scale))}.assistant-detail .assistant-title div>span,.assistant-detail .assistant-context,.assistant-detail .assistant-generation-panel,.assistant-detail .assistant-reverse-controls,.assistant-detail .image-service-form{font-size:calc(12px * var(--assistant-font-scale))}.assistant-detail button,.assistant-detail select,.assistant-detail input,.assistant-detail label,.assistant-detail small,.assistant-detail .composer-context span,.assistant-detail .result-meta span{font-size:calc(11px * var(--assistant-font-scale))}.assistant-detail .chat-list article b{font-size:calc(14px * var(--assistant-font-scale))}.assistant-detail .chat-list article time{font-size:calc(12px * var(--assistant-font-scale))}.assistant-detail .chat-list article p{font-size:calc(15px * var(--assistant-font-scale));line-height:1.78}.assistant-detail .prompt-assistant .composer-input textarea{font-size:calc(13px * var(--assistant-font-scale));line-height:1.6}.assistant-font-setting{margin:12px 14px;padding:14px;border:1px solid #d8d1eb;border-radius:12px;background:#fff;display:grid;gap:10px}.assistant-font-setting label{display:flex;justify-content:space-between;align-items:center;color:#3e374a}.assistant-font-setting input{width:100%;accent-color:#6d28d9}.assistant-font-setting small{color:#756e80}.assistant-font-setting+ .image-service-form{padding-top:0}
+.assistant-detail{--assistant-font-scale:1}.assistant-detail .assistant-title h2{font-size:calc(20px * var(--assistant-font-scale))}.assistant-detail .assistant-title div>span,.assistant-detail .assistant-context,.assistant-detail .assistant-generation-panel,.assistant-detail .assistant-reverse-controls,.assistant-detail .image-service-form{font-size:calc(12px * var(--assistant-font-scale))}.assistant-detail button,.assistant-detail select,.assistant-detail input,.assistant-detail label,.assistant-detail small,.assistant-detail .composer-context span,.assistant-detail .result-meta span{font-size:calc(13.2px * var(--assistant-font-scale))}.assistant-detail .chat-list article b{font-size:calc(14px * var(--assistant-font-scale))}.assistant-detail .chat-list article time{font-size:calc(12px * var(--assistant-font-scale))}.assistant-detail .chat-list article p{font-size:calc(15px * var(--assistant-font-scale));line-height:1.78}.assistant-detail .prompt-assistant .composer-input textarea{font-size:calc(13px * var(--assistant-font-scale));line-height:1.6}.assistant-font-setting{margin:12px 14px;padding:14px;border:1px solid #d8d1eb;border-radius:12px;background:#fff;display:grid;gap:10px}.assistant-font-setting label{display:flex;justify-content:space-between;align-items:center;color:#3e374a}.assistant-font-setting input{width:100%;accent-color:#6d28d9}.assistant-font-setting small{color:#756e80}.assistant-font-setting+ .image-service-form{padding-top:0}
 .workflow-node.skill{border-color:#2fa876}.workflow-node.skill header b{color:#259165}.skill-library-backdrop{position:fixed;inset:0;z-index:40;display:grid;place-items:center;background:#10111a99;backdrop-filter:blur(5px)}.skill-library{width:min(1100px,calc(100vw - 48px));max-height:min(820px,calc(100vh - 48px));overflow:auto;border:1px solid #d8d1e8;border-radius:18px;background:#fbfbff;color:#292735;box-shadow:0 30px 90px #0d112866;padding:20px}.skill-library>header{display:flex;align-items:center;justify-content:space-between}.skill-library h2{margin:3px 0;font-size:25px}.skill-library header small{color:#7758c5;font-weight:700;letter-spacing:.1em}.skill-library button,.skill-library input,.skill-library select,.skill-library textarea{font:inherit}.skill-library button{border:1px solid #d4cee2;border-radius:8px;background:#fff;color:#403a4e;padding:7px 10px;cursor:pointer}.skill-library button.primary{background:#6d28d9;color:#fff;border-color:#6d28d9}.skill-library button.danger{color:#b33b51}.skill-library-tools{display:flex;gap:8px;align-items:center;margin:16px 0}.skill-library-tools input{flex:1}.skill-library input,.skill-library select,.skill-library textarea{width:100%;border:1px solid #d7d1e3;border-radius:8px;background:#fff;color:#302c3a;padding:8px}.skill-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:12px}.skill-grid article{display:flex;flex-direction:column;gap:9px;border:1px solid #dfd9ea;border-radius:12px;background:#fff;padding:13px;min-height:235px}.skill-grid article.unavailable{opacity:.58;background:#f7f6fa}.skill-grid article header,.skill-grid article footer{display:flex;justify-content:space-between;align-items:center}.skill-grid h3,.skill-grid p{margin:0}.skill-grid p{font-size:12px;line-height:1.5;color:#686273}.skill-grid small{font-size:11px;color:#776f82}.skill-grid em{font-size:11px;color:#b35361;font-style:normal}.skill-grid footer{margin-top:auto;gap:5px}.skill-tags{display:flex;gap:5px;flex-wrap:wrap}.skill-tags span{padding:3px 6px;border-radius:999px;background:#efeaff;color:#5c3faa;font-size:10px}.skill-editor{display:grid;gap:10px;border:1px solid #d8cdeb;border-radius:12px;background:#f9f7ff;padding:16px}.skill-editor h3{margin:0}.skill-editor>div{display:grid;grid-template-columns:1fr 1fr;gap:10px}.skill-editor label{display:grid;gap:5px;font-size:12px;color:#5a5366}.skill-editor textarea{min-height:180px;resize:vertical}.skill-editor footer{display:flex;justify-content:flex-end;gap:8px}.skill-requires{display:flex;gap:10px;flex-wrap:wrap}.skill-requires label{display:flex;align-items:center;gap:4px}.skill-requires input{width:auto}.skill-empty{grid-column:1/-1;color:#766e82}.light-theme .workflow-node.skill{background:#fff;border-color:#57b58b;color:#252b2a}.light-theme .workflow-node.skill textarea{background:#fff;color:#292735;border-color:#cfdad4}
 .skill-library-tools{display:grid;grid-template-columns:minmax(220px,1fr) 150px auto auto auto}.skill-library-tools>input[type="search"]{min-width:0;width:100%;height:38px}.skill-library-tools>input[hidden]{display:none!important}.skill-library-tools button{white-space:nowrap;min-width:max-content}
 .skill-preset-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:0 0 15px}.skill-preset-bar span{display:inline-flex;gap:2px}.skill-preset-bar button.active{background:#ede7ff;border-color:#9770e4;color:#5723aa}.skill-preset-select{display:inline-flex;align-items:center;width:auto!important}.skill-preset-select input{width:auto!important}.skill-import-preview{border:1px solid #d8c8f2;border-radius:12px;background:#f8f5ff;padding:14px;margin:0 0 15px}.skill-import-preview h3{margin:0 0 7px}.skill-import-preview p{font-size:12px;color:#625775}.skill-import-preview textarea{min-height:150px;max-height:250px;resize:vertical}.skill-import-preview>div{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}.skill-library .skill-action-error{margin:8px 0 0;color:#b42338;font-size:12px}.skill-library .skill-action-notice{margin:0 0 12px;color:#26734d;font-size:13px}.skill-library button:disabled{cursor:wait;opacity:.65}@media(max-width:760px){.skill-library-tools{grid-template-columns:1fr 1fr}.skill-library-tools>input[type="search"]{grid-column:1/-1}}
@@ -391,7 +391,7 @@
 .canvas-generation-dock{bottom:25px;width:640px;height:180px;min-height:180px;gap:7px;padding:13px 24px 28px;border:0;border-radius:30px;background:#fff;box-shadow:0 0 60px #0000001a}
 .canvas-generation-dock:has(.assistant-reference-strip){height:auto;min-height:180px;max-height:min(420px,calc(100vh - 80px));overflow:visible}
 .generation-history-toggle{position:absolute;right:8px;top:-23px;margin:0;padding:4px 8px;background:#fff;box-shadow:0 2px 8px #00000016}
-.canvas-generation-input{height:86px;min-height:86px;max-height:120px;padding:7px 10px;font-size:12px;line-height:1.5;resize:vertical}
+.canvas-generation-input{height:86px;min-height:86px;max-height:120px;padding:7px 10px;font-size:14.4px;line-height:1.5;resize:vertical}
 .canvas-generation-upload{display:block;margin-right:auto}
 .canvas-upload-button{width:46px;height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;padding:3px;border:1px dashed #bababa;border-radius:8px;background:#ededed;color:#a8a8a8;font-size:14px;line-height:14px}
 .canvas-upload-button span{font-size:15px}
@@ -497,7 +497,7 @@
 .canvas-generation-history .chat-list{flex:1;min-height:0;max-height:none;display:flex;flex-direction:column;gap:8px;margin-top:16px;padding:0 20px 22px;overflow:auto;scrollbar-width:thin}
 .canvas-generation-history .chat-list article{position:relative;display:flex;flex-direction:column;flex:none;min-width:0;min-height:0;margin:0;padding:14px 20px;border:0;border-radius:30px;background:transparent;color:#111}
 .canvas-generation-history .chat-list article>header,.canvas-generation-history .chat-list .result-meta{display:none}
-.canvas-generation-history .chat-list article p{margin:0;color:#111;font-size:calc(11px * var(--assistant-font-scale));line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.canvas-generation-history .chat-list article p{margin:0;color:#111;font-size:calc(13.2px * var(--assistant-font-scale));line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 .canvas-generation-history .chat-list article.user{align-self:flex-end;width:calc(100% - 27px);min-height:66px;padding:14px 20px;border:0;border-radius:30px;background:#ededed}
 .canvas-generation-history .chat-list article.assistant.prompt-card{align-self:flex-start;width:calc(100% - 27px);min-height:159px;margin-right:27px;padding:16px 19px 17px;border:1px solid #ededed;border-radius:30px;background:#fff}
 .canvas-generation-history .chat-list article.error{border:1px solid #efc4c8;background:#fff7f8;color:#982b3e}
@@ -566,6 +566,13 @@ main{position:relative}
 .bar .mode-switch button{display:grid;place-items:center;height:20px;padding:0!important;font-size:12px;line-height:20px!important;text-align:center}
 .bar .canvas-search-in-header .canvas-search-close,.bar .canvas-search-in-header .canvas-search-close:hover,.bar .canvas-search-in-header .canvas-search-close:focus,.bar .canvas-search-in-header .canvas-search-close:focus-visible{position:absolute;top:7px;right:5px;display:grid;place-items:center;width:20px;height:20px;min-height:20px;margin:0;padding:0!important;border:0!important;border-radius:4px;background:transparent!important;color:#222;box-shadow:none!important;font-size:14px;line-height:20px;outline:none}
 .canvas-generation-send:disabled .canvas-generation-send-circle{filter:grayscale(1);opacity:.5}
+.generated-image-toolbar .image-toolbar-auto-reverse,.generated-image-toolbar .image-toolbar-auto-reverse:hover{display:grid;flex:none;width:26px;height:26px;place-items:center;margin:0;padding:0;border:0;border-radius:50%;background:#762ce0;color:#fff;box-shadow:none;cursor:pointer}
+.generated-image-toolbar .image-toolbar-auto-reverse:hover{background:#6422c6}
+.generated-image-toolbar .image-toolbar-auto-reverse:focus-visible{outline:2px solid #762ce0;outline-offset:2px}
+.generated-image-toolbar .image-toolbar-auto-reverse:disabled{opacity:.55;cursor:wait}
+.generated-image-toolbar .image-toolbar-auto-reverse img{display:block;width:16px;height:16px;object-fit:contain}
+.generated-image-toolbar .image-toolbar-auto-reverse.is-busy img{animation:auto-reverse-skill-pulse .9s ease-in-out infinite alternate}
+@keyframes auto-reverse-skill-pulse{to{opacity:.42;transform:scale(.86)}}
 .canvas-generation-send:disabled .canvas-generation-send-arrow{opacity:.55}
 /* Figma Frame 4: compact composition-generation card and framed output cards. */
 .workflow-node.compose{box-sizing:border-box;height:var(--compose-node-height,374px)!important;min-height:var(--compose-node-height,374px)!important;padding:0;display:flex;flex-direction:column;gap:0;overflow:visible;background:#fff;border:1px solid #e8e8e8;border-radius:16px;box-shadow:0 0 32px rgba(0,0,0,.1);color:#111}
@@ -590,11 +597,11 @@ main{position:relative}
 .workflow-node.compose .compose-prompt-label>img{display:block;flex:none;width:14px;height:14px;object-fit:contain}
 .workflow-node.compose .compose-prompt-frame{position:relative;box-sizing:border-box;flex:1;min-height:80px;height:auto;margin-top:4px}
 .workflow-node.compose .compose-prompt-editor{box-sizing:border-box;display:block;width:100%;height:100%;min-height:80px;margin:0;border:1px solid #ededed;border-radius:8px;background:#fff;color:#222;padding:8px 22px 8px 10px;resize:none;overflow:auto;font:10px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif}
-.workflow-node.compose .compose-prompt-resize{position:absolute;right:2px;bottom:2px;width:17px;height:17px;padding:3px;border:0;border-radius:4px;background:#ffffffd9;display:flex;align-items:flex-end;justify-content:flex-end;gap:2px;cursor:ns-resize;touch-action:none}
-.workflow-node.compose .compose-prompt-resize span{display:block;width:2px;height:5px;border-radius:2px;background:#a9a9a9;transform:rotate(-45deg)}
-.workflow-node.compose .compose-prompt-resize span:nth-child(2){height:8px}
-.workflow-node.compose .compose-prompt-resize span:nth-child(3){height:11px}
-.workflow-node.compose .compose-prompt-resize:hover{background:#f2f2f2}
+.workflow-node.compose .compose-prompt-resize,.workflow-textarea-resize{box-sizing:border-box;position:absolute;right:2px;bottom:2px;z-index:3;width:17px;height:17px;margin:0;padding:3px;display:flex;align-items:flex-end;justify-content:flex-end;gap:2px;border:0;border-radius:4px;background:#ffffffd9;cursor:ns-resize;touch-action:none}
+.workflow-node.compose .compose-prompt-resize span,.workflow-textarea-resize span{display:block;flex:none;width:2px;height:5px;border-radius:2px;background:#a9a9a9;transform:rotate(-45deg)}
+.workflow-node.compose .compose-prompt-resize span:nth-child(2),.workflow-textarea-resize span:nth-child(2){height:8px}
+.workflow-node.compose .compose-prompt-resize span:nth-child(3),.workflow-textarea-resize span:nth-child(3){height:11px}
+.workflow-node.compose .compose-prompt-resize:hover,.workflow-textarea-resize:hover{background:#f2f2f2}
 .workflow-node.compose .compose-prompt-editor:focus{outline:1px solid #d9d9d9;border-color:#d9d9d9}
 .workflow-node.compose .compose-node-error{max-height:26px;overflow:auto;margin:3px 0 0;padding:3px 5px;border-radius:5px;background:#fff0f0;color:#b42318;font-size:9px;line-height:1.3}
 .workflow-node.compose .compose-generation-progress{position:absolute;z-index:1;top:-17px;right:25px;display:flex;align-items:center;gap:5px;font-size:9px;color:#666}
@@ -615,7 +622,7 @@ main{position:relative}
 .workflow-node.compose .compose-node-actions button{box-sizing:border-box;flex:1;min-width:0;height:35px;padding:0 10px;border:1px solid #000;border-radius:8px;background:#000;color:#fff;font-size:16px;line-height:33px;cursor:pointer}
 .workflow-node.compose .compose-node-actions button:hover{background:#222}
 .workflow-node.compose .compose-node-actions button:disabled{opacity:.55;cursor:wait}
-.workflow-node.modify{position:absolute;box-sizing:border-box;width:523px;padding:0!important;display:block;height:698px!important;min-height:698px!important;overflow:visible;background:#fff;border:1px solid #e8e8e8;border-radius:16px;box-shadow:0 0 32px rgba(0,0,0,.1);color:#111}
+.workflow-node.modify{position:absolute;box-sizing:border-box;width:523px;padding:0!important;display:block;overflow:visible;background:#fff;border:1px solid #e8e8e8;border-radius:16px;box-shadow:0 0 32px rgba(0,0,0,.1);color:#111}
 .workflow-node.modify.selected{outline:0;outline-offset:0;box-shadow:0 0 32px rgba(0,0,0,.12)}
 .workflow-node.modify.collapsed{box-sizing:border-box;width:523px;height:48px!important;min-height:48px!important;padding:12px!important;display:flex;align-items:center;overflow:hidden}
 .workflow-node.modify .modify-node-header{position:absolute;top:4px;left:11px;right:21px;box-sizing:border-box;height:24px;min-height:24px;margin:0;padding:0;display:flex;align-items:center;gap:6px;border:0;background:transparent;color:#111;font-size:16px;line-height:20px}
@@ -779,3 +786,71 @@ main{position:relative}
 
 .skill-library>header>button{width:32px;height:32px;padding:0;border-radius:8px;display:grid;place-items:center}
 .project-training-dialog>header>button{width:32px;height:32px;border-radius:8px}
+.prompt-text-toolbar{width:max-content;max-width:calc(100% - 24px);flex-wrap:wrap;gap:7px;white-space:normal}
+.prompt-text-generation-settings{display:grid;grid-template-columns:repeat(3,minmax(78px,1fr));gap:5px}
+.prompt-text-generation-settings label{display:grid;gap:3px;color:#6b6672;font:10px/1.2 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif}
+.prompt-text-generation-settings select{width:100%;height:26px;min-width:0;appearance:none;padding:0 22px 0 8px;border:1px solid #dedbe4;border-radius:7px;background:#fff url('/ui-icons/prompt-arrow-down.svg') no-repeat right 6px center;background-size:12px;color:#222;font:11px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif;cursor:pointer}
+.prompt-text-toolbar>button{align-self:center}
+
+.workflow-selection-bar.node-selection-toolbar.has-reference-action{width:min(460px,calc(100% - 24px));grid-template-columns:minmax(0,1fr) 52px 76px 72px 78px 52px}
+@media(max-width:760px){.workflow-selection-bar.node-selection-toolbar.has-reference-action{width:calc(100% - 16px);grid-template-columns:minmax(0,1fr) 50px 76px 68px 76px 50px;column-gap:3px;padding-right:6px;padding-left:8px;transform:translateX(-50%);transform-origin:top center}}
+@media(max-width:460px){.workflow-selection-bar.node-selection-toolbar.has-reference-action{grid-template-columns:minmax(0,1fr) 38px 56px 54px 62px 38px;column-gap:2px;padding-right:4px;padding-left:4px}}
+
+/* Workflow text areas share the same drag-to-grow affordance as composition prompts. */
+.workflow-node .workflow-node-textarea-frame{position:relative;box-sizing:border-box;width:100%;min-width:0}
+.workflow-node .workflow-node-textarea-frame>textarea{box-sizing:border-box;display:block;width:100%;margin:0;padding-right:26px;resize:none}
+.workflow-node.modify .modify-instruction-caption{top:calc(163px + var(--modify-original-delta, 0px))}
+.workflow-node.modify .modify-reference-caption{top:calc(257px + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px))}
+.workflow-node.modify .modify-reference-grid{top:calc(279px + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px))}
+.workflow-node.modify .modify-result-caption{top:calc(379px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px))}
+.workflow-node.modify .modify-original-input{top:69px;height:var(--modify-original-height, 80px);padding-right:26px}
+.workflow-node.modify .modify-instruction-input{top:calc(181px + var(--modify-original-delta, 0px));height:var(--modify-instruction-height, 60px);padding-right:26px}
+.workflow-node.modify .modify-result-input{top:calc(397px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px));height:var(--modify-result-height, 163px);padding-right:26px}
+.workflow-node.modify .modify-generation-controls{top:calc(576px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px) + var(--modify-result-delta, 0px))}
+.workflow-node.modify .modify-node-actions{top:calc(610px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px) + var(--modify-result-delta, 0px))}
+.workflow-node.modify .modify-textarea-resize{right:2px;bottom:auto;z-index:2}
+.workflow-node.modify .modify-original-resize{top:calc(69px + var(--modify-original-height, 80px) - 18px)}
+.workflow-node.modify .modify-instruction-resize{top:calc(181px + var(--modify-original-delta, 0px) + var(--modify-instruction-height, 60px) - 18px)}
+.workflow-node.modify .modify-result-resize{top:calc(397px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px) + var(--modify-result-height, 163px) - 18px)}
+
+.reverse-skill-picker strong{color:#222;font-size:12px;font-weight:500}
+.reverse-template-picker{min-width:230px;gap:5px;padding:8px 10px;color:#555;font-size:11px}
+.reverse-template-picker select{box-sizing:border-box;width:100%;height:30px;min-width:210px;appearance:none;padding:0 30px 0 10px;border:1px solid #e5e5e5;border-radius:999px;background:#fff url('/ui-icons/prompt-arrow-down.svg') no-repeat right 8px center;background-size:14px;color:#111;font:12px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif;cursor:pointer}
+.reverse-template-picker select:focus{outline:1px solid #d8d8d8}
+
+/* Keep auto arrange beside the existing canvas controls without covering them. */
+.fit-canvas.auto-arrange-canvas,.fit-canvas.auto-arrange-canvas.search-open{right:252px}
+@media(max-width:760px){.fit-canvas.auto-arrange-canvas,.fit-canvas.auto-arrange-canvas.search-open{top:36px;right:12px}}
+
+/* Figma: the scrollport ends above the resize tile; both stay at the right edge. */
+.workflow-node .workflow-node-textarea-frame:has(> textarea),
+.workflow-node.compose .compose-prompt-frame,
+.workflow-node.modify .modify-textarea-frame{border:1px solid #ededed;border-radius:8px;background:#fff;overflow:hidden}
+.workflow-node .workflow-node-textarea-frame:focus-within,
+.workflow-node.compose .compose-prompt-frame:focus-within,
+.workflow-node.modify .modify-textarea-frame:focus-within{border-color:#d9d9d9;outline:1px solid #d9d9d9}
+.workflow-node .workflow-node-textarea-frame>textarea,
+.workflow-node.compose .compose-prompt-editor,
+.workflow-node.modify .modify-textarea-frame>textarea{box-sizing:border-box;width:100%;height:calc(100% - 20px);min-height:0!important;border:0;border-radius:7px;outline:0;padding-right:10px;resize:none}
+.workflow-node .workflow-node-textarea-frame>textarea:focus,
+.workflow-node.compose .compose-prompt-editor:focus,
+.workflow-node.modify .modify-textarea-frame>textarea:focus{border:0;outline:0}
+.workflow-textarea-resize,.workflow-node.compose .compose-prompt-resize{right:3px;bottom:3px;width:14px;height:14px;padding:2px;border-radius:4px;background:#ededed}
+.workflow-textarea-resize img,.workflow-node.compose .compose-prompt-resize img{display:block;width:10px;height:10px;object-fit:contain}
+.workflow-textarea-resize:hover,.workflow-node.compose .compose-prompt-resize:hover{background:#e6e6e6}
+.workflow-node.compose .compose-prompt-editor{height:calc(100% - 20px)}
+.workflow-node.modify .modify-textarea-frame{position:absolute;left:0;right:0;box-sizing:border-box}
+.workflow-node.modify .modify-original-frame{top:69px;height:var(--modify-original-height, 80px)}
+.workflow-node.modify .modify-instruction-frame{top:calc(181px + var(--modify-original-delta, 0px));height:var(--modify-instruction-height, 60px)}
+.workflow-node.modify .modify-result-frame{top:calc(397px + var(--modify-extra-reference-space, 0px) + var(--modify-original-delta, 0px) + var(--modify-instruction-delta, 0px));height:var(--modify-result-height, 163px)}
+.workflow-node.modify .modify-textarea-frame>textarea{position:relative;top:0;left:0;display:block;height:calc(100% - 20px);padding:8px 10px}
+.workflow-node.modify .modify-textarea-frame>.workflow-textarea-resize{top:auto;right:3px;bottom:3px}
+.workflow-node:has(> label .node-output) .workflow-node-textarea-frame{border-color:#3a4059;background:#11131c}
+.workflow-node:has(> label .node-output) .workflow-node-textarea-frame>textarea{background:#11131c;color:#f1f1f8}
+
+/* Figma composer: scrollbar above the expand action in the same right gutter. */
+.canvas-generation-dock:not(.input-expanded){height:211px;min-height:211px}
+.canvas-generation-input-wrap{height:108px}
+.canvas-generation-input-wrap .canvas-generation-input{height:80px;min-height:0;max-height:none;padding-right:10px}
+.canvas-generation-expand{right:6px;bottom:2px}
+.canvas-generation-input-wrap.expanded .canvas-generation-input{height:calc(100% - 28px)}

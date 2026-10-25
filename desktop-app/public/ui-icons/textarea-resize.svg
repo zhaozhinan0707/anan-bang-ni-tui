@@ -1,0 +1,13 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="icons/Arrows/figma-flatten-selection" clip-path="url(#clip0_0_9)">
+<path id="Vector" d="M6.66667 3.75L5 5.41667L3.33333 3.75" stroke-linecap="round" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_2" d="M7.5 8.75H2.5" stroke-linecap="round" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_3" d="M8.75 7.08333H1.25" stroke-linecap="round" stroke-linejoin="round" stroke="black"/>
+<path id="Vector_4" d="M5 1.25V5.41667" stroke-linecap="round" stroke-linejoin="round" stroke="black"/>
+</g>
+<defs>
+<clipPath id="clip0_0_9">
+<rect width="10" height="10" fill="white"/>
+</clipPath>
+</defs>
+</svg>
